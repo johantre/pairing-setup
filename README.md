@@ -1,4 +1,4 @@
-# Pairing setup (upterm + tmux + Claude Code)
+# Pairing setup (`upterm` + `tmux` + Claude Code)
 
 Lets two or more people share one terminal, you can see each other typing
 — including a shared Claude Code session — without the garbled cursor/prompt corruption you get from a
@@ -14,69 +14,83 @@ sync screen size; `upterm` just provides the secure tunnel to reach it.
 ## Read this first: sharing a terminal hands out your machine
 
 > [!CAUTION]
-> **Used the way upterm's own docs show it (`upterm host`), a pairing
+> **Used the way `upterm`'s own docs show it (`upterm host`), a pairing
 > session gives everyone who joins full control of your computer, as
 > you.** This setup exists to fix that. Read this section before running
 > any installer, so you know what it puts on your machine and why.
 
-### The problem
+### The problems
 
-`upterm host` shares a *shell running as your own user account*. Whoever
-joins isn't watching your Claude Code pane — they're typing into that
-shell. One `Ctrl-b c` opens a new tmux window of their own, and from there
-they can do anything you can:
+Out of the box, `upterm` comes with three separate security problems:
 
-- read your SSH keys, cloud and git credentials, `.env` files, browser
-  data, and your Claude Code login;
-- copy files off your machine (upterm allows SFTP/SCP by default), or
-  push code and deploy with your credentials;
-- use `sudo` if your account can do so without a password — and the
-  earlier Windows setup of this repo configured exactly that;
-- on Windows/WSL: read and write all of `C:` via `/mnt/c`, and start
-  `powershell.exe` as your Windows account — the whole laptop, not just
-  Linux;
-- leave something behind (a line in `~/.bashrc`, a cron job, an extra
-  key in `~/.ssh/authorized_keys`) that keeps working after the session
-  ends.
+1. **Whoever joins gets your account.** `upterm host` shares a *shell
+   running as your own user account*. Whoever joins isn't watching your
+   Claude Code pane — they're typing into that shell. One `Ctrl-b c` opens
+   a new `tmux` window of their own, and from there they can do anything
+   you can:
+   - read your SSH keys, cloud and `git` credentials, `.env` files,
+     browser data, and your Claude Code login;
+   - copy files off your machine (`upterm` allows `sftp`/`scp` by
+     default), or push code and deploy with your credentials;
+   - use `sudo` if your account can do so without a password — and the
+     earlier Windows setup of this repo configured exactly that;
+   - on Windows/WSL: read and write all of `C:` via `/mnt/c`, and start
+     `powershell.exe` as your Windows account — the whole laptop, not
+     just Linux;
+   - leave something behind (a line in `~/.bashrc`, a `cron` job, an
+     extra key in `~/.ssh/authorized_keys`) that keeps working after the
+     session ends.
+2. **Anyone with the token can join.** By default `upterm` doesn't check
+   the joining key at all: the session token is the only thing standing
+   between the internet and your shell. A token pasted in the wrong chat,
+   forwarded, or visible in a screenshot or screen share is enough.
+3. **The default relay is a third party.** Every session goes through a
+   relay server. Unless you pass `--server`, that's
+   `uptermd.upterm.dev`: a free public service run by `upterm`'s
+   maintainer, outside your organisation, with no contract or audit. The
+   relay decrypts everything passing through, so it can read your screen
+   and inject keystrokes into your shell — and on a hostile network, an
+   attacker can pose as it. See
+   [Why not `upterm`'s public relay](#why-not-upterms-public-relay).
 
-And by default, *who* can join is anyone who has the session token —
-upterm doesn't check the joining key at all. A token pasted in the wrong
-chat, forwarded, or visible in a screenshot or screen share is enough. The
-relay in between can also read and type into every session (see
-[Running your own relay](#running-your-own-relay)).
-
-In security terms: an unauthenticated remote shell as your own user. On a
-developer machine with access to source code, production credentials and
-customer data, that's a serious risk, not a theoretical one.
+Together: an unauthenticated remote shell as your own user, through a
+server you don't control. On a developer machine with access to source
+code, production credentials and customer data, that's a serious risk,
+not a theoretical one.
 
 ### What this setup does about it
 
-1. **Only your team can join.** `pair` only lets in keys listed in
-   [`team_authorized_keys`](team_authorized_keys), reviewed via pull
-   requests (see [Team keys](#team-keys)). The token alone is useless.
-2. **Participants never get your account.** Sessions run as a separate,
-   unprivileged `pairing` user — no sudo, no access to your home, your
+1. **Participants never get your account.** Sessions run as a separate,
+   unprivileged `pairing` user — no `sudo`, no access to your home, your
    keys or your own Claude login. On Windows that user lives in a WSL
    distro of its own that can't see your Windows drives or start Windows
-   programs. File transfer (SFTP/SCP) is off.
-3. **Your own relay, pinned.** Sessions go through a relay you run
-   yourself instead of a public one, and its identity is pinned so it
-   can't be impersonated.
+   programs. File transfer (`sftp`/`scp`) is off.
+2. **Only your team can join.** `pair` only lets in keys listed in
+   [`team_authorized_keys`](team_authorized_keys), reviewed via pull
+   requests (see [Team keys](#team-keys)). The token alone is useless.
+3. **Your own relay, pinned.** Sessions go through an `uptermd` relay you
+   run yourself instead of the public one, and its host key is pinned so
+   it can't be impersonated.
 
 ### What stays open
 
-A participant *is* still the `pairing` user: they can do everything that
-user can — read and change what you cloned into its home, use its Claude
-Code login, and use any credentials you give it (so give it scoped ones).
-And whoever controls the relay can still read and type into sessions.
-Only pair with people you'd trust at your keyboard. Details:
-[Security considerations](#security-considerations--open-points).
+- **Participants are still the `pairing` user.** They can do everything
+  that user can: read and change what you cloned into its home, use its
+  Claude Code login, and use any credentials you give it — so give it
+  scoped ones.
+- **Your own relay still sees everything.** It's yours now, but it still
+  decrypts sessions, so whoever gets into the relay server can read and
+  type into them. Keep it locked down.
+- **Trust.** This limits the damage; it doesn't make a stranger safe. Only
+  pair with people you'd trust at your keyboard.
+
+Details: [Security considerations](#security-considerations--open-points).
 
 ### What the installers put on your machine
 
 Both list their changes and ask before doing anything:
 
-- `tmux`, `upterm`, Node.js and Claude Code — skipped if already
+- `tmux`, `upterm`, `node` and Claude Code (`claude`) — skipped if already
   installed, otherwise via the package manager you already have (see
   [Install](#install));
 - a user account named `pairing`, without admin rights or a usable
@@ -94,73 +108,92 @@ included), and say how to fix it.
 
 ## Install
 
-Fork or clone this repo first, then run the installer from a terminal
-inside it (all commands below assume you're in this folder):
-```
-git clone https://github.com/johantre/pairing-setup.git
-cd pairing-setup
-```
-One-time per team: [`relay.conf`](relay.conf) must point at your relay,
-and [`team_authorized_keys`](team_authorized_keys) must list your team —
-the installer refuses to run until `relay.conf` is filled in. A fork is the
-natural place for both: they're specific to your team.
+### Once per team
 
-**macOS / native Linux:**
-```
-./install-unix.sh
-```
-It lists what it's going to change (see
-[above](#what-the-installers-put-on-your-machine)) and asks before doing
-anything; `--yes` skips the question. It asks for your sudo password to
-create the `pairing` user and install `pair`.
+- **Fork or clone this repo.** All commands below assume you're in its
+  folder:
+  ```
+  git clone https://github.com/johantre/pairing-setup.git
+  cd pairing-setup
+  ```
+- **Fill in [`relay.conf`](relay.conf)** with your relay's address and
+  host key (see [Running your own relay](#running-your-own-relay)). The
+  installers refuse to run until it is.
+- **List your team in [`team_authorized_keys`](team_authorized_keys)**
+  (see [Team keys](#team-keys)). Until it has at least one key, `pair`
+  refuses to start.
 
-Tools you already have are left alone, however you installed them. Missing
-ones come from the package manager already on your machine:
+Both files are specific to your team, which makes a fork the natural place
+to keep them.
 
-| | Used for tmux, Node.js | upterm |
-|---|---|---|
-| **macOS** | Homebrew, else MacPorts | Homebrew tap, else pinned GitHub release |
-| **Linux** | apt, dnf or pacman, else Homebrew | Homebrew if that's the manager used, else pinned GitHub release (`.deb` on Debian/Ubuntu) |
+### macOS / native Linux
 
-On a Mac with neither Homebrew nor MacPorts, install one of them (most
-people use [Homebrew](https://brew.sh)) or the missing tools yourself, and
-re-run. Claude Code always comes from npm (`@anthropic-ai/claude-code`).
-Everything must be installed system-wide (not just for your account), since
-sessions run as the `pairing` user.
+- **Run the installer:**
+  ```
+  ./install-unix.sh
+  ```
+  - It lists what it's going to change (see
+    [above](#what-the-installers-put-on-your-machine)) and asks before
+    doing anything; `--yes` skips the question.
+  - It asks for your `sudo` password, to create the `pairing` user and
+    install `pair`.
+- **Tools you already have are left alone**, however you installed them.
+  Missing ones come from the package manager already on your machine:
 
-**Windows:** `tmux` has no native Windows build (`upterm` does, but the
-session still needs `tmux`), so the session runs inside WSL2.
-```
-./install-windows.ps1
-```
-If PowerShell refuses with *"running scripts is disabled on this
-system"*, that's its default execution policy, not a problem with the
-script — either run it once via
-`powershell -ExecutionPolicy Bypass -File .\install-windows.ps1`, or set
-`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` for your account.
+  | | `tmux`, `node` | `upterm` |
+  |---|---|---|
+  | **macOS** | `brew` (Homebrew), else `port` (MacPorts) | Homebrew tap, else pinned GitHub release |
+  | **Linux** | `apt`, `dnf` or `pacman`, else `brew` | `brew` if that's the manager used, else pinned GitHub release (`.deb` on Debian/Ubuntu) |
 
-Windows' own package managers (winget, Chocolatey, Scoop) don't come into
-it: nothing is installed on the Windows side except WSL itself, and inside
-WSL it's Ubuntu's `apt`.
+  - On a Mac with neither Homebrew nor MacPorts: install one of them (most
+    people use [Homebrew](https://brew.sh)) or the missing tools yourself,
+    and re-run.
+  - Claude Code always comes from `npm` (`@anthropic-ai/claude-code`).
+- **Everything must be installed system-wide**, not just for your account,
+  since sessions run as the `pairing` user. Tools inside your own home
+  (e.g. `node` via `nvm`) can't be reached by it; the installer checks
+  this and stops if so.
 
-After asking for confirmation, this creates a **separate WSL distro named `pairing`** (an Ubuntu, next to
-any Ubuntu you may already have — that one isn't touched), then runs
-`install-unix.sh` inside it. That distro is locked down in
-`/etc/wsl.conf`: no `/mnt/c` (Windows drives aren't mounted) and no running
-Windows programs from inside it. Without that, any WSL user can read and
-write all of `C:` and start `powershell.exe` as your Windows account — so
-a participant would effectively be on your Windows machine. Installing the
-WSL platform requires one reboot if it's genuinely your first time; the
-script tells you when to re-run it.
+### Windows
 
-Both installers are safe to re-run — every step skips work that's already
-done. **Re-run after pulling** changes to `relay.conf` or
-`team_authorized_keys`: `pair` uses the installed copies, not the repo.
+- **Why WSL:** `tmux` has no native Windows build (`upterm` does, but the
+  session still needs `tmux`), so the session runs inside WSL2.
+- **Run the installer:**
+  ```
+  ./install-windows.ps1
+  ```
+  - If PowerShell refuses with *"running scripts is disabled on this
+    system"*, that's its default execution policy, not a problem with the
+    script. Either run it once via
+    `powershell -ExecutionPolicy Bypass -File .\install-windows.ps1`, or
+    set `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` for your
+    account.
+  - Installing the WSL platform requires one reboot if it's genuinely
+    your first time; the script tells you when to re-run it.
+- **What it does**, after asking for confirmation:
+  - creates a **separate WSL distro named `pairing`** (an Ubuntu, next to
+    any `Ubuntu` distro you may already have — that one isn't touched);
+  - runs `install-unix.sh` inside it;
+  - locks that distro down in `/etc/wsl.conf`: no `/mnt/c` (Windows drives
+    aren't mounted) and no running Windows programs from inside it.
+    Without that, any WSL user can read and write all of `C:` and start
+    `powershell.exe` as your Windows account — so a participant would
+    effectively be on your Windows machine.
+- **No Windows package manager needed:** `winget`, Chocolatey or Scoop
+  don't come into it. Nothing is installed on the Windows side except WSL
+  itself, and inside WSL it's Ubuntu's `apt`.
 
-> Upgrading from the earlier setup on Windows? That one ran sessions in
-> your regular `Ubuntu` distro and gave its user password-less sudo
-> (`/etc/sudoers.d/<you>`). Sessions now run in the `pairing` distro;
-> consider removing that sudoers file from your Ubuntu if you don't need it.
+### Re-running and updating
+
+- **Both installers are safe to re-run**: every step skips work that's
+  already done.
+- **Re-run after pulling** changes to `relay.conf` or
+  `team_authorized_keys`: `pair` uses the installed copies, not the repo.
+- **Upgrading from the earlier setup on Windows?** That one ran sessions in
+  your regular `Ubuntu` distro and gave its user password-less `sudo`
+  (`/etc/sudoers.d/<you>`). Sessions now run in the `pairing` distro;
+  consider removing that sudoers file from your `Ubuntu` if you don't need
+  it.
 
 ## Team keys
 
@@ -194,7 +227,7 @@ Add the printed line to `team_authorized_keys` in a pull request. Removing
 someone (they left, lost a laptop) is deleting their line — effective for
 every host that has pulled and re-run the installer.
 
-Only public keys go in that file, so it's fine to commit. upterm can also
+Only public keys go in that file, so it's fine to commit. `upterm` can also
 fetch keys itself (`--github-user`, `--gitlab-user`, `--codeberg-user`,
 `--srht-user`), but a file under review works wherever your repo is hosted
 and is easier to reason about than whatever keys happen to be on
@@ -211,7 +244,7 @@ On Windows: `wsl -d pairing -- pair` from any terminal, or run `pair` in
 the `pairing` profile that shows up in Windows Terminal / your IDE's
 terminal list.
 
-upterm shows the session details and asks once whether to start sharing;
+`upterm` shows the session details and asks once whether to start sharing;
 confirm, and it prints a join command — share
 `ssh TOKEN@<relay-host> -p <port>` with your pairing partner. Anything
 after `pair` is passed on to `upterm host`, e.g. `pair --read-only` for a
@@ -223,13 +256,13 @@ yours, which is the point. On Windows those files are reachable from your
 IDE as `\\wsl.localhost\pairing\home\pairing\...`.
 
 Both of you should be able to type without corrupting each other's view.
-If it still looks broken, check tmux's `window-size` session option
+If it still looks broken, check `tmux`'s `window-size` session option
 (`tmux show -g window-size`): the default, `smallest`, shrinks the shared
 session to whichever attached client has the smaller terminal — usually
 the right call. `set -g window-size manual` pins an explicit size instead
 if you need to force one.
 
-**Typing feels laggy joining from macOS?** tmux repaints a relatively
+**Typing feels laggy joining from macOS?** `tmux` repaints a relatively
 large chunk of the screen on every keystroke (the line, status bar, and
 cursor position), and macOS's built-in `Terminal.app` redraws that
 noticeably slower than most alternatives — this showed up as visible
@@ -250,10 +283,10 @@ ssh -i ~/.ssh/upterm_client_key -p <port> TOKEN@<relay-host>
 ssh -i $HOME\.ssh\upterm_client_key -p <port> TOKEN@<relay-host>
 ```
 
-You land directly in the shared tmux session. `Permission denied
+You land directly in the shared `tmux` session. `Permission denied
 (publickey)` means the key you offered isn't in the host's installed
 `team_authorized_keys` — check your PR is merged and the host re-ran the
-installer since. Re-run with `-v` to see which key ssh actually offered.
+installer since. Re-run with `-v` to see which key `ssh` actually offered.
 
 The installers pin the relay's host key in your `known_hosts`. Joining
 from a native Windows PowerShell (not via WSL) isn't covered by them — add
@@ -264,12 +297,12 @@ Add-Content $HOME\.ssh\known_hosts "[<relay-host>]:<port> <RELAY_HOST_KEY>"
 
 ## Running your own relay
 
-### Why not upterm's public relay
+### Why not `upterm`'s public relay
 
-upterm always goes through a relay server (`uptermd`): the host keeps an
+`upterm` always goes through a relay server (`uptermd`): the host keeps an
 SSH tunnel open to it, and participants connect to the relay, not to the
 host. By default that's `uptermd.upterm.dev`, a free public relay run by
-upterm's maintainer. It works, and it's fine for a quick demo — but know
+`upterm`'s maintainer. It works, and it's fine for a quick demo — but know
 what you're trusting:
 
 - **The relay sees everything in clear text.** Both connections are
@@ -304,7 +337,7 @@ what you're trusting:
 - **Only your hosts can use it** (optional, recommended — step 4 below),
   so it's not an open relay for anyone on the internet.
 
-What it doesn't fix: the relay still decrypts sessions — that's how upterm
+What it doesn't fix: the relay still decrypts sessions — that's how `upterm`
 works. Keep the relay server locked down (firewall, patched, few admins),
 because whoever gets into it gets into every session.
 
@@ -313,7 +346,7 @@ because whoever gets into it gets into every session.
 It's a single Go binary with one SSH port; any small Linux VM with a
 public IP will do (any cloud provider — the cheapest tier is plenty).
 
-upterm's own docs list several ways to deploy it — a Helm chart for
+`upterm`'s own docs list several ways to deploy it — a Helm chart for
 Kubernetes, Fly.io, Heroku, Docker Compose behind Traefik, and a hardened
 systemd unit: see
 [Deploy Uptermd](https://github.com/owenthereal/upterm#deploy-uptermd).
@@ -341,7 +374,7 @@ Pick whichever fits what you already run. This repo's
    ```
    Both should match; if they don't, something between you and the relay
    is rewriting traffic.
-4. **Recommended: restrict who can host.** By default any upterm client
+4. **Recommended: restrict who can host.** By default any `upterm` client
    that reaches port 2222 can host sessions on your relay. To allow only
    your team's hosts, collect the relay login keys the installer prints
    on each host (the `pairing` user's `~/.ssh/upterm_key.pub`) into an
@@ -375,7 +408,7 @@ expects it).
   later sessions as that user; if in doubt, recreate the user (or on
   Windows: `wsl --unregister pairing` and re-run the installer).
 - **The relay sees everything, even your own.** See
-  [Why not upterm's public relay](#why-not-upterms-public-relay): running
+  [Why not `upterm`'s public relay](#why-not-upterms-public-relay): running
   your own makes the operator yourself, it doesn't make the relay blind.
   Keep the relay VM locked down accordingly.
 - **The host-key pin only protects what it was checked against.** It
@@ -414,7 +447,7 @@ These are real failures hit while building this script, not hypotheticals:
 - **`/mnt/c` is empty and `explorer.exe` / `code .` don't work in the
   `pairing` distro:** intended — see [Install](#install). Reach its files
   from Windows via `\\wsl.localhost\pairing\` instead.
-- **Don't use the Windows-side Node/npm from inside WSL** (e.g. an
+- **Don't use the Windows-side `node`/`npm` from inside WSL** (e.g. an
   `nvm-windows` install reachable via `/mnt/c/...` through WSL interop) —
   it can resolve `npm` on `PATH` with no matching `node` binary, and
   mixing a Windows-side JS toolchain with a Linux one inside WSL is
@@ -425,6 +458,6 @@ These are real failures hit while building this script, not hypotheticals:
 
 `install-unix.sh` downloads a specific, versioned release asset from
 GitHub and installs it explicitly (`.deb`/`dpkg`, or a `.tar.gz` extracted
-to `/usr/local/bin`) rather than piping `curl | bash` from upterm's own
+to `/usr/local/bin`) rather than piping `curl | bash` from `upterm`'s own
 install script. Same end result, but it's a reviewable pinned artifact
 instead of blind execution of an unreviewed remote script.
