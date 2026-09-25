@@ -19,6 +19,29 @@ sync screen size; `upterm` just provides the secure tunnel to reach it.
 > you.** This setup exists to fix that. Read this section before running
 > any installer, so you know what it puts on your machine and why.
 
+### How an `upterm` session works
+
+The problems below make more sense with the moving parts in mind:
+
+1. **The host starts a session.** They run `upterm host`, which opens an
+   SSH connection to a **relay server** (`uptermd`) and keeps it open. The
+   host's machine doesn't need to be reachable from the internet; the
+   relay is the meeting point.
+2. **The relay hands out a session token.** A random string that
+   identifies this one session. `upterm` prints it as a ready-made join
+   command, with the token as the SSH user name:
+   ```
+   ssh <token>@uptermd.upterm.dev
+   ```
+3. **The host shares that command** with whoever should join — usually in
+   a chat message.
+4. **Participants run it.** Their `ssh` connects to the relay, the relay
+   looks up the session by its token, and connects them to the host's
+   terminal.
+
+So the token is the session's address. As the next section shows, it's
+also — by default — the only thing that decides who gets in.
+
 ### The problems
 
 Out of the box, `upterm` comes with three separate security problems:
@@ -40,10 +63,12 @@ Out of the box, `upterm` comes with three separate security problems:
    - leave something behind (a line in `~/.bashrc`, a `cron` job, an
      extra key in `~/.ssh/authorized_keys`) that keeps working after the
      session ends.
-2. **Anyone with the token can join.** By default `upterm` doesn't check
-   the joining key at all: the session token is the only thing standing
-   between the internet and your shell. A token pasted in the wrong chat,
-   forwarded, or visible in a screenshot or screen share is enough.
+2. **Anyone with the token can join.** The session token (see
+   [above](#how-an-upterm-session-works)) is not just the session's
+   address but, by default, its only lock: `upterm` accepts any SSH key
+   from whoever connects with it. So the join command effectively *is*
+   the password — pasted in the wrong chat, forwarded, or visible in a
+   screenshot or screen share, it's enough to get in.
 3. **The default relay is a third party.** Every session goes through a
    relay server. Unless you pass `--server`, that's
    `uptermd.upterm.dev`: a free public service run by `upterm`'s
