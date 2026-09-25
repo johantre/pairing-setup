@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1400" viewBox="0 0 1280 1400" role="img" aria-labelledby="t d">
   <title id="t">Pairing setup: how it connects</title>
-  <desc id="d">A host on macOS, Linux or Windows with WSL2 runs `pair`, which starts one shared tmux session as the unprivileged pairing user and connects it to your own uptermd relay with a pinned host key. Clients on any OS join over SSH with a key listed in team_authorized_keys; a client with only the token is denied. Below: a raw shared pty garbles each viewer's screen, while tmux inside the session keeps every screen identical.</desc>
+  <desc id="d">A host on macOS, Linux or Windows with WSL2 runs `pair`, which starts one shared tmux session as the unprivileged pairing user and connects it to your own uptermd relay with a pinned server key. Clients on any OS join over SSH with a key listed in team_authorized_keys; a client with only the token is denied. Below: a raw shared pty garbles each viewer's screen, while tmux inside the session keeps every screen identical.</desc>
   <defs>
     <style>
       .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
@@ -81,7 +81,7 @@
   <rect x="676" y="398" width="170" height="120" rx="14" fill="#fff" stroke="#2b2926" stroke-width="1.5"/>
   <text x="761" y="424" class="sans" font-size="11" letter-spacing="1" fill="#2b2926" text-anchor="middle">RELAY (YOUR OWN)</text>
   <text x="761" y="446" class="mono" font-size="12" fill="#2b2926" text-anchor="middle">uptermd</text>
-  <text x="761" y="474" class="mono" font-size="10.5" fill="#5f8a5f" text-anchor="middle">✓ host key pinned</text>
+  <text x="761" y="474" class="mono" font-size="10.5" fill="#5f8a5f" text-anchor="middle">✓ server key pinned</text>
   <text x="761" y="492" class="mono" font-size="10.5" fill="#5f8a5f" text-anchor="middle">✓ only your hosts</text>
   <text x="761" y="540" class="sans" font-size="11" fill="#b5524a" text-anchor="middle">decrypts all traffic —</text>
   <text x="761" y="555" class="sans" font-size="11" fill="#b5524a" text-anchor="middle">keep it locked down</text>

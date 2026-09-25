@@ -9,7 +9,7 @@ exactly what Claude Code's interactive prompt is). The fix is a
 multiplexer (`tmux`) *inside* the shared session to serialize input and
 sync screen size; `upterm` just provides the secure tunnel to reach it.
 
-![Diagram: a host on any OS (macOS/Linux/Windows+WSL2) runs `pair`, which shares one tmux session as the unprivileged pairing user over your own relay (host key pinned, only your hosts); clients on any OS join over SSH with a key listed in team_authorized_keys, while a client with only the token is denied. Below: a raw shared pty garbles each viewer's screen, while tmux inside the session keeps every screen identical.](pairing-topology.svg)
+![Diagram: a host on any OS (macOS/Linux/Windows+WSL2) runs `pair`, which shares one tmux session as the unprivileged pairing user over your own relay (server key pinned, only your hosts); clients on any OS join over SSH with a key listed in team_authorized_keys, while a client with only the token is denied. Below: a raw shared pty garbles each viewer's screen, while tmux inside the session keeps every screen identical.](pairing-topology.svg)
 
 ## Read this first: sharing a terminal hands out your machine
 
@@ -90,12 +90,13 @@ not a theoretical one.
    keys or your own Claude login. On Windows that user lives in a WSL
    distro of its own that can't see your Windows drives or start Windows
    programs. File transfer (`sftp`/`scp`) is off.
-2. **Only your team can join.** `pair` only lets in keys listed in
-   [`team_authorized_keys`](team_authorized_keys), reviewed via pull
-   requests (see [Team keys](#team-keys)). The token alone is useless.
-3. **Your own relay, pinned.** Sessions go through an `uptermd` relay you
-   run yourself instead of the public one, and its host key is pinned so
-   it can't be impersonated.
+2. **Only your team can join.** `pair` only lets in keys listed in your
+   team's `team_authorized_keys`, reviewed via pull requests (see
+   [step 4](#4-add-participants)). The token alone is useless.
+3. **Your own relay, pinned and closed.** Sessions go through an `uptermd`
+   relay you run yourself instead of the public one. Its server key is
+   pinned so it can't be impersonated, and only your team's host machines
+   can use it.
 
 ### What stays open
 
@@ -103,63 +104,243 @@ not a theoretical one.
   that user can: read and change what you cloned into its home, use its
   Claude Code login, and use any credentials you give it — so give it
   scoped ones.
-- **Your own relay still sees everything.** It's yours now, but it still
-  decrypts sessions, so whoever gets into the relay server can read and
-  type into them. Keep it locked down.
+- **Your own relay is still trusted with everything.** It's yours now,
+  but it still decrypts sessions and enforces who may join, so whoever
+  gets into the relay server can read, type into, and join every session.
+  Keep it locked down (see
+  [The relay is the most sensitive part](#the-relay-is-the-most-sensitive-part)).
 - **Trust.** This limits the damage; it doesn't make a stranger safe. Only
   pair with people you'd trust at your keyboard.
 
 Details: [Security considerations](#security-considerations--open-points).
 
+## Keys and tokens at a glance
+
+Several keys are involved, and their names look alike. Each one proves
+something different:
+
+| | What | Belongs to | Private half | Public half goes in | Proves |
+|---|---|---|---|---|---|
+| **Relay server key** | `RELAY_SERVER_KEY` | the relay | on the relay, `/etc/uptermd/` | `relay.conf` → everyone's `known_hosts` | "I am the real relay" |
+| **Relay login key** | `relay_login_key` | each host machine | the `pairing` user's `~/.ssh/` | `relay_authorized_hosts` | "this machine may start sessions on the relay" |
+| **Client key** | `upterm_client_key` | each participant | the participant's `~/.ssh/` | `team_authorized_keys` | "this person may join a session" |
+| **Session token** | — | one session | — (not a key) | the join command | nothing — it's only the session's address |
+
+Two lists, two gates:
+
+- **`relay_authorized_hosts`** is checked by the relay when a session
+  *starts*: who may host.
+- **`team_authorized_keys`** is checked when someone *joins*: who may take
+  part. Being on one list doesn't put you on the other; someone who both
+  hosts and joins has a relay login key on their host machine *and* a
+  client key of their own.
+
+## Setup in four steps
+
+### Who does what
+
+- **Relay admin** — whoever runs the relay server. Usually one or two
+  people; they have `root` on it.
+- **Host** — anyone who starts pairing sessions from their machine.
+- **Participant** — anyone who joins them. Needs nothing installed.
+
+One person can have several roles.
+
+### Two repos
+
+- **[pairing-setup](https://github.com/johantre/pairing-setup)** (this
+  one, public): the tools. Use it as is; `git pull` for updates.
+- **[pairing-config](https://github.com/johantre/pairing-config)**
+  (public template): your team's data — relay address, who may host, who
+  may join. Each team makes a **private** copy of it.
+
+Clone both next to each other; the scripts find the config there by
+default (or pass `--config <path>`):
+```
+your-folder/
+├── pairing-setup/     ← the tools (public)
+└── pairing-config/    ← your team's private copy of the template
+```
+
+### The steps, in order
+
+Each step needs the one before it:
+
+1. **[Create your team's config](#1-create-your-teams-config)** — once per
+   team.
+2. **[Run your own relay](#2-run-your-own-relay)** — once per team, by the
+   relay admin. The installers refuse to run until the relay is in
+   `relay.conf` and reachable.
+3. **[Install each host](#3-install-a-host)** — once per host machine, then
+   the relay admin lets it in.
+4. **[Add participants](#4-add-participants)** — once per person.
+
+After that: [start and join sessions](#use).
+
+## 1. Create your team's config
+
+1. On GitHub, open
+   [pairing-config](https://github.com/johantre/pairing-config) and click
+   **Use this template → Create a new repository**.
+2. Choose **Private**. The template is public; your filled-in copy says
+   where your relay is and who's on your team, so it shouldn't be.
+3. Clone it next to this repo:
+   ```
+   git clone https://github.com/johantre/pairing-setup.git
+   git clone <your-private-pairing-config-url> pairing-config
+   ```
+
+Everyone who hosts needs read access to it; changes go through pull
+requests, so who can merge there decides who gets into your sessions.
+
+## 2. Run your own relay
+
+### Why not `upterm`'s public relay
+
+`upterm` always goes through a relay server (`uptermd`): the host keeps an
+SSH tunnel open to it, and participants connect to the relay, not to the
+host. By default that's `uptermd.upterm.dev`, a free public relay run by
+`upterm`'s maintainer. It works, and it's fine for a quick demo — but know
+what you're trusting:
+
+- **The relay sees everything in clear text.** Both connections are
+  encrypted, but only up to the relay: `uptermd` decrypts traffic from one
+  side and re-encrypts it for the other. It is not end-to-end encrypted.
+  So the relay can read everything on screen and everything typed — your
+  code, Claude's output, a secret you `cat` or paste.
+- **The relay can also type.** It sits in the middle of an interactive
+  shell, so whoever controls it can inject keystrokes: run commands on the
+  host as the session's user. That makes the relay part of your attack
+  surface, not just a pipe.
+- **The relay decides who joins.** The host hands its list of allowed
+  keys to the relay, and the relay enforces it. Whoever controls the relay
+  can let anyone in.
+- **You have no say over who controls it.** A free public service run by
+  someone outside your organisation, with no contract, no audit, and no
+  notice if it's compromised or changes hands. It's also a shared target:
+  breaking into one public relay exposes every session on it.
+- **Anyone can pose as it.** Your first connection to a relay asks you to
+  accept its server key without anything to compare against. On a hostile
+  network (hotel wifi, a DNS hijack, a proxy that intercepts SSH) you
+  could be accepting an attacker's relay, which then gets all of the
+  above.
+- **Availability.** If it's down or rate-limited, nobody can pair.
+
+### What running your own relay fixes
+
+- **The relay operator is you.** The relay runs on a server your
+  organisation controls, so seeing and typing into sessions is limited to
+  people who already have access to that server.
+- **Its identity is pinned.** Its server key is in `relay.conf` and
+  installed into everyone's `known_hosts`, so an impersonated relay gets a
+  hard error instead of a yes/no prompt.
+- **Only your hosts can use it.** The relay only accepts the machines in
+  `relay_authorized_hosts`; it starts out closed.
+
+### The relay is the most sensitive part
+
+Running your own relay moves the risk, it doesn't remove it: the relay
+still decrypts every session, can type into it, and enforces who may join.
+Whoever gets into the relay server gets into every session. Treat it
+accordingly:
+
+- **Few admins.** Only the relay admins need `root` on it; hosts and
+  participants never do.
+- **Your cloud account** (where the VM runs) with two-factor
+  authentication — whoever controls that controls the VM.
+- **Admin SSH with keys only**, no password logins.
+- **Firewall:** only the relay port (2222) and your admin SSH port open.
+- **Keep it patched** (OS security updates), and re-run `deploy.sh`
+  now and then for `uptermd` updates.
+
+`deploy.sh` sandboxes `uptermd` itself (see below), but doesn't configure
+the points above for you.
+
+### Setting it up
+
+`uptermd` is a single Go binary with one SSH port; any small Linux VM with
+a public IP will do (any cloud provider — the cheapest tier is plenty).
+`upterm`'s own docs list several ways to deploy it — a Helm chart for
+Kubernetes, Fly.io, Heroku, Docker Compose behind Traefik, and a hardened
+systemd unit: see
+[Deploy Uptermd](https://github.com/owenthereal/upterm#deploy-uptermd).
+This repo's [`deploy.sh`](deploy.sh) is the systemd route, scripted, and
+the rest of this README assumes it:
+
+1. **Create the VM** and open inbound TCP **2222** (`uptermd`) plus your
+   admin SSH port in its firewall. Nothing else needs to be reachable.
+2. **Deploy** from your machine, over SSH as `root` (or a sudo user, `-u`):
+   ```
+   ./deploy.sh <relay-ip>
+   ```
+   - It downloads a specific, checksum-verified `uptermd` release from
+     GitHub and runs it as a sandboxed systemd service (dedicated non-root
+     user, `ProtectSystem=strict`, `NoNewPrivileges`, ...).
+   - It creates the relay's server key in `/etc/uptermd/`, and ends by
+     printing it as a ready-to-paste `RELAY_SERVER_KEY="..."` line.
+   - It applies `relay_authorized_hosts` from your pairing-config. Empty at
+     this point, so the relay starts **closed**: nobody can host yet.
+   - Safe to re-run for updates: it keeps the server key (a new one would
+     break everyone's pinned `known_hosts` entry).
+3. **Fill in `relay.conf`** in your pairing-config — `RELAY_HOST`,
+   `RELAY_PORT`, `RELAY_SERVER_KEY` — and commit it. Before you do,
+   confirm the key from a *different network* than the one you deployed
+   from:
+   ```
+   ssh-keyscan -p 2222 -t ed25519 <relay-ip>
+   ```
+   Both should match; if they don't, something between you and the relay
+   is rewriting traffic.
+
+### Letting hosts in
+
+When a new host's relay login key is merged into `relay_authorized_hosts`
+(see [step 3](#3-install-a-host)), the relay admin pulls pairing-config
+and applies the list:
+```
+./deploy.sh <relay-ip> --hosts-only
+```
+That only uploads the list and restarts `uptermd` — it reads the list once
+at startup. The restart **drops sessions in progress**, so do it when
+nobody's pairing. Removing a host works the same way: delete its line,
+merge, apply.
+
+To read the relay's server key again later (e.g. to confirm a redeploy
+didn't change it):
+```
+ssh root@<relay-ip> 'ssh-keygen -lf /etc/uptermd/ssh_host_ed25519_key.pub'
+```
+If it ever changes on purpose, update `relay.conf` and have everyone
+re-pin it, or connections will hard-fail with `REMOTE HOST IDENTIFICATION
+HAS CHANGED` (correctly — but confusingly, if nobody expects it).
+
+## 3. Install a host
+
+This sets up a **host**: a machine you'll start pairing sessions from.
+Only joining? Skip to [step 4](#4-add-participants).
+
 ### What the installers put on the host machine
 
-The installers are for **hosts**: the machine a session runs on. Only
-joining other people's sessions? You don't need them at all — an SSH
-client, which every OS ships with, and a key in the team list are enough
-(see [Joining as a participant](#joining-as-a-participant)).
-
-On a host, both installers list their changes and ask before doing
-anything:
+The installers are for **hosts** only. Before changing anything, they
+check that your pairing-config is there and filled in, and that the relay
+is up and presents the server key from `relay.conf`. Then they list their
+changes and ask:
 
 - `tmux`, `upterm`, `node` and Claude Code (`claude`) — skipped if already
-  installed, otherwise via the package manager you already have (see
-  [Install](#install));
+  installed, otherwise via the package manager you already have;
 - a user account named `pairing`, without admin rights or a usable
   password, that sessions run as (on Windows: a WSL distro named
   `pairing` containing that user, with no access to Windows);
-- the `pair` command in `/usr/local/bin`, and its config (relay address,
-  pinned relay key, team keys) in `/usr/local/share/pairing`, root-owned
-  so nobody inside a session can change who may join;
-- an SSH key for the `pairing` user to log in to the relay, and the
-  relay's host key in your own `~/.ssh/known_hosts`.
+- the `pair` command in `/usr/local/bin`, and a copy of your team config
+  (relay address, pinned server key, team keys) in
+  `/usr/local/share/pairing`, root-owned so nobody inside a session can
+  change who may join;
+- a relay login key for the `pairing` user, and the relay's server key in
+  your own `~/.ssh/known_hosts`.
 
 Nothing else on the host is changed. The installers do *warn* if your
 own home directory is readable by other users (the `pairing` user
 included), and say how to fix it.
-
-## Install
-
-This sets up a **host**: a machine you'll start pairing sessions from.
-Only joining? Skip to [Team keys](#team-keys) and
-[Joining as a participant](#joining-as-a-participant).
-
-### Once per team
-
-- **Fork or clone this repo.** All commands below assume you're in its
-  folder:
-  ```
-  git clone https://github.com/johantre/pairing-setup.git
-  cd pairing-setup
-  ```
-- **Fill in [`relay.conf`](relay.conf)** with your relay's address and
-  host key (see [Running your own relay](#running-your-own-relay)). The
-  installers refuse to run until it is.
-- **List your team in [`team_authorized_keys`](team_authorized_keys)**
-  (see [Team keys](#team-keys)). Until it has at least one key, `pair`
-  refuses to start.
-
-Both files are specific to your team, which makes a fork the natural place
-to keep them.
 
 ### macOS / native Linux
 
@@ -167,11 +348,9 @@ to keep them.
   ```
   ./install-unix.sh
   ```
-  - It lists what it's going to change (see
-    [above](#what-the-installers-put-on-the-host-machine)) and asks before
-    doing anything; `--yes` skips the question.
   - It asks for your `sudo` password, to create the `pairing` user and
-    install `pair`.
+    install `pair`. `--yes` skips the confirmation question;
+    `--config <path>` points to a pairing-config elsewhere.
 - **Tools you already have are left alone**, however you installed them.
   Missing ones come from the package manager already on your machine:
 
@@ -203,6 +382,7 @@ to keep them.
     `powershell -ExecutionPolicy Bypass -File .\install-windows.ps1`, or
     set `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` for your
     account.
+  - `-Config <path>` points to a pairing-config elsewhere.
   - Installing the WSL platform requires one reboot if it's genuinely
     your first time; the script tells you when to re-run it.
 - **What it does**, after asking for confirmation:
@@ -218,29 +398,43 @@ to keep them.
   don't come into it. Nothing is installed on the Windows side except WSL
   itself, and inside WSL it's Ubuntu's `apt`.
 
+### Let the relay know about the new host
+
+The installer ends by printing this machine's **relay login key** — unless
+it's already in `relay_authorized_hosts`. Until it is, the relay refuses to
+let this machine start sessions:
+
+1. Add the printed line to `relay_authorized_hosts` in your pairing-config,
+   in a pull request.
+2. Once merged, the relay admin applies it (see
+   [Letting hosts in](#letting-hosts-in)).
+
+Only needed once per host machine, not per session.
+
 ### Re-running and updating
 
 - **Both installers are safe to re-run**: every step skips work that's
   already done.
-- **Re-run after pulling** changes to `relay.conf` or
-  `team_authorized_keys`: `pair` uses the installed copies, not the repo.
+- **Re-run after pulling pairing-config** when `relay.conf` or
+  `team_authorized_keys` changed: `pair` uses the installed copies, not
+  the repo.
 - **Upgrading from the earlier setup on Windows?** That one ran sessions in
   your regular `Ubuntu` distro and gave its user password-less `sudo`
   (`/etc/sudoers.d/<you>`). Sessions now run in the `pairing` distro;
   consider removing that sudoers file from your `Ubuntu` if you don't need
   it.
 
-## Team keys
+## 4. Add participants
 
-[`team_authorized_keys`](team_authorized_keys) lists the public keys
+`team_authorized_keys` in your pairing-config lists the public keys
 allowed to join, one per line in the standard OpenSSH `authorized_keys`
 format, with a `name@device` comment so it's obvious whose key it is:
 ```
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... jan@macbook
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... piet@wsl
 ```
-To be able to join, generate a small dedicated key once (no passphrase, so
-joining doesn't prompt every time):
+To be able to join, generate a small dedicated client key once (no
+passphrase, so joining doesn't prompt every time):
 
 **macOS / Linux / WSL:**
 ```
@@ -258,20 +452,22 @@ bare empty-string argument to a native `.exe`, shifting the arguments after
 it, so `ssh-keygen` ends up misparsing the command. Passing the literal
 `""` characters through sidesteps that.
 
-Add the printed line to `team_authorized_keys` in a pull request. Removing
-someone (they left, lost a laptop) is deleting their line — effective for
-every host that has pulled and re-run the installer.
+Add the printed line to `team_authorized_keys` in a pull request. Hosts
+pick it up by pulling pairing-config and re-running their installer.
+Removing someone (they left, lost a laptop) is deleting their line, the
+same way.
 
-Only public keys go in that file, so it's fine to commit. `upterm` can also
-fetch keys itself (`--github-user`, `--gitlab-user`, `--codeberg-user`,
-`--srht-user`), but a file under review works wherever your repo is hosted
-and is easier to reason about than whatever keys happen to be on
-someone's account at the moment — including an old key from a lost laptop
-nobody remembered to remove.
+`upterm` can also fetch keys itself (`--github-user`, `--gitlab-user`,
+`--codeberg-user`, `--srht-user`), but a reviewed file works wherever your
+config is hosted and is easier to reason about than whatever keys happen
+to be on someone's account at the moment — including an old key from a
+lost laptop nobody remembered to remove.
 
 ## Use
 
-Whoever's hosting runs, in a terminal:
+### Starting a session (host)
+
+Run, in a terminal:
 ```
 pair
 ```
@@ -308,24 +504,24 @@ session, same relay, had none. Try iTerm2, Ghostty, or kitty instead.
 
 Nothing to install: you need an SSH client (built into macOS, Linux and
 Windows 10+) and a key listed in `team_authorized_keys` (see
-[Team keys](#team-keys)).
+[step 4](#4-add-participants)).
 
-**Once: pin the relay's host key**, with the values from `relay.conf`, so
-`ssh` can tell the real relay from an impersonator. Hosts who ran the
+**Once: pin the relay's server key**, with the values from `relay.conf`,
+so `ssh` can tell the real relay from an impersonator. Hosts who ran the
 installer already have this.
 
 **macOS / Linux / WSL:**
 ```
-echo "[<relay-host>]:<port> <RELAY_HOST_KEY>" >> ~/.ssh/known_hosts
+echo "[<relay-host>]:<port> <RELAY_SERVER_KEY>" >> ~/.ssh/known_hosts
 ```
 
 **PowerShell (native Windows client):**
 ```
-Add-Content $HOME\.ssh\known_hosts "[<relay-host>]:<port> <RELAY_HOST_KEY>"
+Add-Content $HOME\.ssh\known_hosts "[<relay-host>]:<port> <RELAY_SERVER_KEY>"
 ```
 
-**Then, for each session**, run the command the host shares, with the
-key you added to `team_authorized_keys`:
+**Then, for each session**, run the command the host shares, with your
+client key:
 
 **macOS / Linux / WSL:**
 ```
@@ -342,138 +538,37 @@ You land directly in the shared `tmux` session. `Permission denied
 `team_authorized_keys` — check your PR is merged and the host re-ran the
 installer since. Re-run with `-v` to see which key `ssh` actually offered.
 
-## Running your own relay
-
-### Why not `upterm`'s public relay
-
-`upterm` always goes through a relay server (`uptermd`): the host keeps an
-SSH tunnel open to it, and participants connect to the relay, not to the
-host. By default that's `uptermd.upterm.dev`, a free public relay run by
-`upterm`'s maintainer. It works, and it's fine for a quick demo — but know
-what you're trusting:
-
-- **The relay sees everything in clear text.** Both connections are
-  encrypted, but only up to the relay: `uptermd` decrypts traffic from one
-  side and re-encrypts it for the other. It is not end-to-end encrypted.
-  So the relay can read everything on screen and everything typed — your
-  code, Claude's output, a secret you `cat` or paste.
-- **The relay can also type.** It sits in the middle of an interactive
-  shell, so whoever controls it can inject keystrokes: run commands on the
-  host as the session's user. That makes the relay part of your attack
-  surface, not just a pipe.
-- **You have no say over who controls it.** A free public service run by
-  someone outside your organisation, with no contract, no audit, and no
-  notice if it's compromised or changes hands. It's also a shared target:
-  breaking into one public relay exposes every session on it.
-- **Anyone can pose as it.** Your first connection to a relay asks you to
-  accept its host key without anything to compare against. On a hostile
-  network (hotel wifi, a DNS hijack, a proxy that intercepts SSH) you
-  could be accepting an attacker's relay, which then gets all of the
-  above.
-- **Availability.** If it's down or rate-limited, nobody can pair.
-
-### What running your own relay fixes
-
-- **The relay operator is you.** The relay runs on a server your
-  organisation controls, so seeing and typing into sessions is limited to
-  people who already have access to that server — the same trust you
-  place in your other infrastructure.
-- **Its identity is pinned.** Its host key is in [`relay.conf`](relay.conf)
-  and installed into everyone's `known_hosts`, so an impersonated relay
-  gets a hard error instead of a yes/no prompt.
-- **Only your hosts can use it** (optional, recommended — step 4 below),
-  so it's not an open relay for anyone on the internet.
-
-What it doesn't fix: the relay still decrypts sessions — that's how `upterm`
-works. Keep the relay server locked down (firewall, patched, few admins),
-because whoever gets into it gets into every session.
-
-### Setting it up
-
-It's a single Go binary with one SSH port; any small Linux VM with a
-public IP will do (any cloud provider — the cheapest tier is plenty).
-
-`upterm`'s own docs list several ways to deploy it — a Helm chart for
-Kubernetes, Fly.io, Heroku, Docker Compose behind Traefik, and a hardened
-systemd unit: see
-[Deploy Uptermd](https://github.com/owenthereal/upterm#deploy-uptermd).
-Pick whichever fits what you already run. This repo's
-[`deploy.sh`](deploy.sh) is the systemd route, scripted:
-
-1. **Create the VM** and open inbound TCP **2222** (uptermd) plus your
-   admin SSH port in its firewall. Nothing else needs to be reachable.
-2. **Deploy** from your machine, over SSH as root (or a sudo user, `-u`):
-   ```
-   ./deploy.sh <relay-ip>
-   ```
-   It downloads a specific, checksum-verified `uptermd` release from
-   GitHub and runs it as a sandboxed systemd service (dedicated non-root
-   user, `ProtectSystem=strict`, `NoNewPrivileges`, ...) with a persistent
-   host key in `/etc/uptermd/`. It ends by printing that host key as a
-   ready-to-paste `RELAY_HOST_KEY="..."` line. Safe to re-run for updates:
-   it reuses the host key rather than regenerating it (a new one would
-   break every client's pinned `known_hosts` entry).
-3. **Fill in [`relay.conf`](relay.conf)** — `RELAY_HOST`, `RELAY_PORT`,
-   `RELAY_HOST_KEY` — and commit it. Before you do, confirm the key from a
-   *different network* than the one you deployed from:
-   ```
-   ssh-keyscan -p 2222 -t ed25519 <relay-ip>
-   ```
-   Both should match; if they don't, something between you and the relay
-   is rewriting traffic.
-4. **Recommended: restrict who can host.** By default any `upterm` client
-   that reaches port 2222 can host sessions on your relay. To allow only
-   your team's hosts, collect the relay login keys the installer prints
-   on each host (the `pairing` user's `~/.ssh/upterm_key.pub`) into an
-   `authorized_keys`-format file and deploy with it:
-   ```
-   ./deploy.sh <relay-ip> --authorized-hosts relay_authorized_hosts
-   ```
-   It's kept on the relay; later deploys without the option keep using
-   it. A host that isn't listed can't start a session there anymore, so
-   add new hosts to it before they try.
-
-To read the relay's host key again later (e.g. to confirm a redeploy
-didn't change it):
-```
-ssh root@<relay-ip> 'ssh-keygen -lf /etc/uptermd/ssh_host_ed25519_key.pub'
-```
-If it ever changes on purpose, update `relay.conf` and have everyone
-re-run the installer, or joins will hard-fail with `REMOTE HOST
-IDENTIFICATION HAS CHANGED` (correctly — but confusingly, if nobody
-expects it).
-
 ## Security considerations — open points
 
 - **Participants are the `pairing` user.** Everything that user can do,
   every participant can do: read and change the repos in its home, use
   its Claude Code login (so they can run Claude on your subscription or
-  API key, and read its token), and use any git credentials you give it.
+  API key, and read its token), and use any `git` credentials you give it.
   Give it only what a pairing session needs — e.g. a repo-scoped deploy
   key or fine-grained token for pushing, not your personal key. Anything
   a participant leaves behind in its home (a `~/.bashrc` line) runs in
   later sessions as that user; if in doubt, recreate the user (or on
   Windows: `wsl --unregister pairing` and re-run the installer).
-- **The relay sees everything, even your own.** See
-  [Why not `upterm`'s public relay](#why-not-upterms-public-relay): running
-  your own makes the operator yourself, it doesn't make the relay blind.
-  Keep the relay VM locked down accordingly.
-- **The host-key pin only protects what it was checked against.** It
+- **The relay is trusted with everything.** See
+  [The relay is the most sensitive part](#the-relay-is-the-most-sensitive-part):
+  running your own makes the operator yourself, it doesn't make the relay
+  blind.
+- **The server-key pin only protects what it was checked against.** It
   stops anyone between *you* and the relay from impersonating it, but if
   the key was captured through an already-compromised path, you've pinned
   the attacker. Hence the check from a second network in
-  [Running your own relay](#running-your-own-relay).
+  [Setting it up](#setting-it-up).
 - **`deploy.sh` hasn't been independently reviewed** beyond initial
   setup. It downloads a checksummed release and applies reasonable systemd
   sandboxing, but treat it as a starting point, not an audited artifact.
-- **Passphrase-less keys.** The host's `upterm_key` (relay login) has no
-  passphrase so `pair` starts non-interactively, and it lives in the
-  `pairing` user's home — assume past participants have it. On a relay
-  with `--authorized-hosts` that means they could host sessions on your
-  relay; rotate it (delete it, re-run the installer, update the relay's
-  list) if that matters. Participants' `upterm_client_key` is equally
-  usable by anyone who gets a copy of the file; its line in
-  `team_authorized_keys` is what to delete when that happens.
+- **Passphrase-less keys.** A host's `relay_login_key` has no passphrase
+  so `pair` starts non-interactively, and it lives in the `pairing`
+  user's home — assume past participants have it, which lets them start
+  sessions on your relay. Rotate it if that matters: delete it, re-run the
+  installer, and swap the line in `relay_authorized_hosts`. A
+  participant's `upterm_client_key` is equally usable by anyone who gets a
+  copy of the file; its line in `team_authorized_keys` is what to delete
+  when that happens.
 
 ## Troubleshooting (Windows/WSL)
 
@@ -492,7 +587,7 @@ These are real failures hit while building this script, not hypotheticals:
   everything runs as root and `install-unix.sh` creates the `pairing`
   user itself.
 - **`/mnt/c` is empty and `explorer.exe` / `code .` don't work in the
-  `pairing` distro:** intended — see [Install](#install). Reach its files
+  `pairing` distro:** intended — see [Windows](#windows). Reach its files
   from Windows via `\\wsl.localhost\pairing\` instead.
 - **Don't use the Windows-side `node`/`npm` from inside WSL** (e.g. an
   `nvm-windows` install reachable via `/mnt/c/...` through WSL interop) —

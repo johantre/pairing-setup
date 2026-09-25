@@ -1,4 +1,2 @@
 *.sh text eol=lf
 pair text eol=lf
-relay.conf text eol=lf
-team_authorized_keys text eol=lf

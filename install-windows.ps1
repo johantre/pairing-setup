@@ -24,17 +24,44 @@
     wslsettings.exe) can crash outright instead of completing - confirmed
     via a Windows Error Reporting crash record. This script never relies on
     it: everything runs as root, and install-unix.sh creates the user.
+
+.PARAMETER Config
+  Your team's copy of the pairing-config template. Defaults to a
+  pairing-config folder next to this repo.
 #>
+param(
+  [string]$Config = (Join-Path $PSScriptRoot "..\pairing-config")
+)
 
 $ErrorActionPreference = "Stop"
 
 $Distro = "pairing"
+$ConfigFiles = "relay.conf", "team_authorized_keys", "relay_authorized_hosts"
 
 function Say($msg) { Write-Host $msg }
 
-# 0. Say exactly what this is going to change, and ask first: people should
-#    know what they're installing. install-unix.sh then runs with --yes.
-Say "This installer is about to make these changes on this machine:"
+# 0a. The team config comes first (see the README's "Setup in four steps"):
+#     stop before touching anything if it's missing or not filled in.
+if (-not (Test-Path (Join-Path $Config "relay.conf")) -or -not (Test-Path (Join-Path $Config "team_authorized_keys"))) {
+  Say "No team config found in $Config."
+  Say "Create your team's private copy of the pairing-config template and clone it"
+  Say "next to this repo, or point to it with -Config <path>."
+  exit 1
+}
+$Config = (Resolve-Path $Config).Path
+$relayConf = Get-Content (Join-Path $Config "relay.conf") -Raw
+foreach ($var in "RELAY_HOST", "RELAY_PORT", "RELAY_SERVER_KEY") {
+  if ($relayConf -notmatch "(?m)^$var=`"[^`"]+`"") {
+    Say "$Config\relay.conf isn't filled in ($var is empty)."
+    Say "The relay comes first - see the README's '2. Run your own relay'."
+    exit 1
+  }
+}
+
+# 0b. Say exactly what this is going to change, and ask first: people should
+#     know what they're installing. install-unix.sh then runs with --yes.
+Say "This installer sets up this machine as a pairing HOST, using the team"
+Say "config in $Config. It's about to make these changes:"
 Say ""
 Say "  - install/update the WSL platform (Windows' built-in Linux subsystem)"
 Say "  - create a separate WSL distro named '$Distro' (Ubuntu); an existing"
@@ -87,19 +114,23 @@ if ($probe -notmatch "OK") {
   exit 1
 }
 
-# 5. Copy the installer and its config into the distro through the \\wsl$
-#    share. Not via /mnt/c: after the first run the distro has no Windows
-#    drives mounted anymore, on purpose.
+# 5. Copy the installer and the team config into the distro through the
+#    \\wsl$ share. Not via /mnt/c: after the first run the distro has no
+#    Windows drives mounted anymore, on purpose.
 $target = "\\wsl.localhost\$Distro\tmp\pairing-setup"
-New-Item -ItemType Directory -Force $target | Out-Null
-foreach ($f in "install-unix.sh", "pair", "relay.conf", "team_authorized_keys") {
+New-Item -ItemType Directory -Force "$target\config" | Out-Null
+foreach ($f in "install-unix.sh", "pair") {
   Copy-Item -Force (Join-Path $PSScriptRoot $f) $target
 }
+foreach ($f in $ConfigFiles) {
+  $src = Join-Path $Config $f
+  if (Test-Path $src) { Copy-Item -Force $src "$target\config" }
+}
 
-# 6. Hand off to the shared unix installer, as root: it creates the
-#    unprivileged 'pairing' user itself and locks the distro down.
+# 6. Hand off to the shared unix installer, as root: it checks the relay,
+#    creates the unprivileged 'pairing' user itself and locks the distro down.
 Say "Running install-unix.sh inside the '$Distro' distro..."
-wsl -d $Distro --user root -- bash /tmp/pairing-setup/install-unix.sh --wsl-dedicated-distro --yes
+wsl -d $Distro --user root -- bash /tmp/pairing-setup/install-unix.sh --config /tmp/pairing-setup/config --wsl-dedicated-distro --yes
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # 7. /etc/wsl.conf only applies on the distro's next start.

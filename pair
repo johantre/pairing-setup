@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
 # Starts a shared pairing session: tmux inside `upterm host`, on the team's
-# own relay, joinable only with a key listed in the team's authorized_keys.
+# own relay, joinable only with a key listed in team_authorized_keys.
 #
 # Usage: pair [extra `upterm host` flags, e.g. --read-only]
 #
-# Installed to /usr/local/bin by install-unix.sh, together with its config in
-# /usr/local/share/pairing (root-owned, so nobody inside a session can edit
-# who may join or which relay host key is trusted).
+# Installed to /usr/local/bin by install-unix.sh, together with a copy of the
+# team's config in /usr/local/share/pairing (root-owned, so nobody inside a
+# session can edit who may join or which relay server key is trusted).
 set -euo pipefail
 
 CONF_DIR="/usr/local/share/pairing"
@@ -23,18 +23,18 @@ if [ "$(id -un)" != "$PAIRING_USER" ]; then
   exec sudo -u "$PAIRING_USER" -H env PATH="$PATH" /usr/local/bin/pair "$@"
 fi
 
-# shellcheck source=relay.conf
+# RELAY_HOST and RELAY_PORT, written by the installer.
 . "$CONF_DIR/relay.conf"
 
 if ! grep -qE '^[[:space:]]*(ssh-|ecdsa-|sk-)' "$CONF_DIR/authorized_keys"; then
   err "No keys in $CONF_DIR/authorized_keys, so nobody could join."
-  err "Add your team's keys to team_authorized_keys and re-run the installer."
+  err "Add keys to team_authorized_keys in your pairing-config, then re-run the installer."
   exit 1
 fi
 
 cd "$HOME"
 exec upterm host \
-  -i "$HOME/.ssh/upterm_key" \
+  -i "$HOME/.ssh/relay_login_key" \
   --server "ssh://$RELAY_HOST:$RELAY_PORT" \
   --known-hosts "$CONF_DIR/known_hosts" \
   --authorized-keys "$CONF_DIR/authorized_keys" \

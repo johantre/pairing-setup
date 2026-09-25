@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
 #
-# Pairing setup for macOS or native Linux: installs tmux + upterm + Claude
-# Code, creates the dedicated unprivileged `pairing` user that sessions run
-# as, and installs the `pair` command with the team's relay config and
-# authorized keys.
+# Sets up a pairing HOST on macOS or native Linux: installs tmux + upterm +
+# Claude Code, creates the dedicated unprivileged `pairing` user that
+# sessions run as, and installs the `pair` command with your team's config
+# (relay address, relay server key, who may join).
+#
+# Usage: ./install-unix.sh [--config <dir>] [--yes]
+#   --config <dir>  your team's copy of the pairing-config template
+#                   (default: ../pairing-config, next to this repo)
+#   --yes           don't ask before making changes
 #
 # Windows users: don't run this directly — run install-windows.ps1 instead.
 # It creates a dedicated WSL distro and then calls this same script from
 # inside it (with --wsl-dedicated-distro).
 #
 # Safe to re-run: every step skips work that's already done. Re-run it after
-# pulling changes to relay.conf or team_authorized_keys.
+# pulling changes to your pairing-config.
 set -euo pipefail
 
 say()  { printf '%s\n' "$*"; }
@@ -21,27 +26,59 @@ OS="$(uname -s)"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PAIRING_USER="pairing"
 CONF_DIR="/usr/local/share/pairing"
+TEAM_CONFIG="$SCRIPT_DIR/../pairing-config"
 
 WSL_DEDICATED_DISTRO=0
 ASSUME_YES=0
-for arg in "$@"; do
-  case "$arg" in
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --config)               TEAM_CONFIG="${2:?--config needs a directory}"; shift ;;
     --wsl-dedicated-distro) WSL_DEDICATED_DISTRO=1 ;;
     --yes|-y)               ASSUME_YES=1 ;;
-    *) err "Unknown option: $arg (supported: --yes)"; exit 1 ;;
+    *) err "Unknown option: $1 (supported: --config <dir>, --yes)"; exit 1 ;;
   esac
+  shift
 done
 
-# Our own uptermd relay (see the README's "Running your own relay"). Fail
-# before installing anything if nobody has filled it in yet. Stripping \r
-# keeps a CRLF checkout on Windows from breaking it.
-eval "$(tr -d '\r' < "$SCRIPT_DIR/relay.conf")"
-if [ -z "${RELAY_HOST:-}" ] || [ -z "${RELAY_PORT:-}" ] || [ -z "${RELAY_HOST_KEY:-}" ]; then
-  err "relay.conf isn't filled in (RELAY_HOST / RELAY_PORT / RELAY_HOST_KEY)."
-  err "Set up a relay first — see the README's \"Running your own relay\"."
+# Your team's config (see the README's "Setup in four steps"). Fail before
+# installing anything if it's missing or the relay isn't filled in yet.
+# Stripping \r keeps a CRLF checkout on Windows from breaking it.
+if [ ! -f "$TEAM_CONFIG/relay.conf" ] || [ ! -f "$TEAM_CONFIG/team_authorized_keys" ]; then
+  err "No team config found in $TEAM_CONFIG."
+  err "Create your team's private copy of the pairing-config template and clone it"
+  err "next to this repo, or point to it with --config <dir>."
   exit 1
 fi
-RELAY_PIN="[$RELAY_HOST]:$RELAY_PORT $RELAY_HOST_KEY"
+TEAM_CONFIG="$(cd "$TEAM_CONFIG" && pwd)"
+eval "$(tr -d '\r' < "$TEAM_CONFIG/relay.conf")"
+if [ -z "${RELAY_HOST:-}" ] || [ -z "${RELAY_PORT:-}" ] || [ -z "${RELAY_SERVER_KEY:-}" ]; then
+  err "$TEAM_CONFIG/relay.conf isn't filled in (RELAY_HOST / RELAY_PORT / RELAY_SERVER_KEY)."
+  err "The relay comes first — see the README's \"2. Run your own relay\"."
+  exit 1
+fi
+RELAY_PIN="[$RELAY_HOST]:$RELAY_PORT $RELAY_SERVER_KEY"
+
+# Talks to the relay before anything is installed: is it up, and does it
+# present the server key from relay.conf? A wrong key means a typo in
+# relay.conf, a redeployed relay, or someone in between pretending to be
+# it — in every case, stop rather than install against it.
+check_relay() {
+  local scanned
+  scanned="$(ssh-keyscan -T 5 -p "$RELAY_PORT" -t "${RELAY_SERVER_KEY%% *}" "$RELAY_HOST" 2>/dev/null | grep -v '^#' | cut -d' ' -f2,3 || true)"
+  if [ -z "$scanned" ]; then
+    err "Can't reach the relay at $RELAY_HOST:$RELAY_PORT."
+    err "Is it running, is port $RELAY_PORT open in its firewall, and is RELAY_HOST in relay.conf right?"
+    exit 1
+  fi
+  if [ "$scanned" != "$RELAY_SERVER_KEY" ]; then
+    err "The relay at $RELAY_HOST:$RELAY_PORT presents a different server key than relay.conf:"
+    err "  relay.conf: $RELAY_SERVER_KEY"
+    err "  relay:      $scanned"
+    err "Either relay.conf is out of date, or something is impersonating the relay. Don't continue until you know which."
+    exit 1
+  fi
+  say "Relay $RELAY_HOST:$RELAY_PORT is up and presents the expected server key"
+}
 
 # Uses whatever package manager the machine already has instead of bringing
 # its own: Homebrew or MacPorts on macOS; the distro's own manager on Linux,
@@ -95,7 +132,8 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # Lists exactly what this run is going to change on this machine, and asks
 # before touching anything: people should know what they're installing.
 confirm_plan() {
-  say "This installer is about to make these changes on this machine:"
+  say "This installer sets up this machine as a pairing HOST, using the team config"
+  say "in $TEAM_CONFIG. It's about to make these changes:"
   say ""
   if have tmux; then say "  - tmux: already installed, left alone"; else say "  - install tmux (via $PM)"; fi
   if have upterm; then say "  - upterm: already installed, left alone"
@@ -108,8 +146,8 @@ confirm_plan() {
   else say "  - create a user account '$PAIRING_USER' (no admin rights, no password login) that sessions run as"
   fi
   say "  - install /usr/local/bin/pair, and its config in $CONF_DIR"
-  say "  - create an SSH key for the '$PAIRING_USER' user to log in to the relay"
-  say "  - add the relay's host key ($RELAY_HOST:$RELAY_PORT) to your ~/.ssh/known_hosts"
+  say "  - create a relay login key for the '$PAIRING_USER' user (~$PAIRING_USER/.ssh/relay_login_key)"
+  say "  - add the relay's server key ($RELAY_HOST:$RELAY_PORT) to your ~/.ssh/known_hosts"
   if [ "$WSL_DEDICATED_DISTRO" = 1 ]; then
     say "  - write /etc/wsl.conf: this distro loses access to Windows drives and Windows programs"
   fi
@@ -239,11 +277,11 @@ check_tools_usable_by_pairing_user() {
 }
 
 # Root-owned, so nobody inside a session (they're all $PAIRING_USER) can add
-# their own key to the join list or swap the pinned relay host key.
+# their own key to the join list or swap the pinned relay server key.
 install_pair_command() {
   sudo install -d -m 755 "$CONF_DIR" /usr/local/bin
-  tr -d '\r' < "$SCRIPT_DIR/relay.conf" | sudo tee "$CONF_DIR/relay.conf" >/dev/null
-  tr -d '\r' < "$SCRIPT_DIR/team_authorized_keys" | sudo tee "$CONF_DIR/authorized_keys" >/dev/null
+  printf 'RELAY_HOST="%s"\nRELAY_PORT="%s"\n' "$RELAY_HOST" "$RELAY_PORT" | sudo tee "$CONF_DIR/relay.conf" >/dev/null
+  tr -d '\r' < "$TEAM_CONFIG/team_authorized_keys" | sudo tee "$CONF_DIR/authorized_keys" >/dev/null
   printf '%s\n' "$RELAY_PIN" | sudo tee "$CONF_DIR/known_hosts" >/dev/null
   sudo chmod 644 "$CONF_DIR/relay.conf" "$CONF_DIR/authorized_keys" "$CONF_DIR/known_hosts"
   tr -d '\r' < "$SCRIPT_DIR/pair" | sudo tee /usr/local/bin/pair >/dev/null
@@ -255,33 +293,34 @@ install_pair_command() {
   fi
 }
 
-# The key `upterm host` authenticates to the relay with. Dedicated and
+# The key `upterm host` logs in to the relay with. Dedicated and
 # passphrase-less so sessions start non-interactively; it lives in the
 # pairing user's home, so treat it as known to every past participant.
-setup_upterm_key() {
+# The relay only lets it start sessions once it's in relay_authorized_hosts.
+setup_relay_login_key() {
   sudo -u "$PAIRING_USER" -H sh -c '
     mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
-    if [ ! -f "$HOME/.ssh/upterm_key" ]; then
-      ssh-keygen -t ed25519 -N "" -f "$HOME/.ssh/upterm_key" -C "upterm host key ($(whoami)@$(hostname))" -q
+    if [ ! -f "$HOME/.ssh/relay_login_key" ]; then
+      ssh-keygen -t ed25519 -N "" -f "$HOME/.ssh/relay_login_key" -C "relay login key ($(whoami)@$(hostname))" -q
     fi'
-  say "Relay login key for this host (add it to the relay's authorized_hosts if it restricts hosts):"
-  say "  $(sudo -u "$PAIRING_USER" -H sh -c 'cat "$HOME/.ssh/upterm_key.pub"')"
+  RELAY_LOGIN_PUB="$(sudo -u "$PAIRING_USER" -H sh -c 'cat "$HOME/.ssh/relay_login_key.pub"')"
 }
 
-# Pins the relay's host key for *you* too, for when you join someone else's
-# session with plain ssh: without it, the first join is a blind yes/no prompt
-# that looks the same whether you reach the real relay or an impersonator
-# (DNS hijack, malicious wifi/proxy). `pair` itself uses $CONF_DIR/known_hosts.
-pin_relay_host_key() {
+# Pins the relay's server key for *you* too, for when you join someone
+# else's session with plain ssh: without it, the first join is a blind
+# yes/no prompt that looks the same whether you reach the real relay or an
+# impersonator (DNS hijack, malicious wifi/proxy). `pair` itself uses
+# $CONF_DIR/known_hosts.
+pin_relay_server_key() {
   local khfile="$HOME/.ssh/known_hosts"
   mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
   touch "$khfile"
   if grep -qF "$RELAY_PIN" "$khfile" 2>/dev/null; then
-    say "Relay host key already pinned"
+    say "Relay server key already pinned"
     return
   fi
   printf '%s\n' "$RELAY_PIN" >> "$khfile"
-  say "Pinned relay host key in $khfile"
+  say "Pinned relay server key in $khfile"
 }
 
 # The pairing user can only be kept out of your files if your home isn't
@@ -324,6 +363,7 @@ WSLCONF
   say "Wrote /etc/wsl.conf (no Windows drives, no Windows executables)"
 }
 
+check_relay
 detect_pkg_manager
 confirm_plan
 install_tmux
@@ -332,13 +372,28 @@ install_node_and_claude
 create_pairing_user
 check_tools_usable_by_pairing_user
 install_pair_command
-setup_upterm_key
-pin_relay_host_key
+setup_relay_login_key
+pin_relay_server_key
 check_home_permissions
 if [ "$WSL_DEDICATED_DISTRO" = 1 ]; then lockdown_wsl_distro; fi
 
 say ""
-say "Setup done. Start a shared pairing session with:"
+say "Setup done."
+say ""
+# The relay only lets listed machines start sessions; tell the user whether
+# this one is listed yet, going by their current pairing-config checkout.
+if grep -qF "$(printf '%s' "$RELAY_LOGIN_PUB" | cut -d' ' -f2)" "$TEAM_CONFIG/relay_authorized_hosts" 2>/dev/null; then
+  say "This machine's relay login key is in relay_authorized_hosts."
+else
+  say "One more step before 'pair' works: the relay doesn't know this machine yet."
+  say "Add this line to relay_authorized_hosts in your pairing-config, via a pull request:"
+  say ""
+  say "  $RELAY_LOGIN_PUB"
+  say ""
+  say "Once it's merged, whoever runs the relay applies it with: ./deploy.sh <relay-host> --hosts-only"
+fi
+say ""
+say "Then start a shared pairing session with:"
 say "  pair"
 say "It runs as the '$PAIRING_USER' user, so log in to Claude Code there once"
 say "(run 'claude' inside the session) and clone the repos you pair on into its home."
