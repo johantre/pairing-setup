@@ -1,0 +1,10 @@
+# Public keys allowed to JOIN a pairing session (`pair` passes this file to
+# `upterm host --authorized-keys`). Having the session token is not enough:
+# a participant also needs the private key matching one of these lines.
+#
+# One key per line, OpenSSH authorized_keys format; the trailing comment is
+# free text, use it for "name@device" so it's obvious whose key it is:
+#   ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... jan@macbook
+#
+# Add or remove people via a pull request. Hosts pick up changes by pulling
+# and re-running the installer.

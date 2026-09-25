@@ -1,6 +1,6 @@
 # Pairing setup (upterm + tmux + Claude Code)
 
-Lets two or more people share one terminal, you can see each other typing 
+Lets two or more people share one terminal, you can see each other typing
 — including a shared Claude Code session — without the garbled cursor/prompt corruption you get from a
 raw shared SSH/pty session. A raw shared pty has no input serialization, so
 simultaneous keystrokes interleave and break escape sequences, and
@@ -9,24 +9,127 @@ exactly what Claude Code's interactive prompt is). The fix is a
 multiplexer (`tmux`) *inside* the shared session to serialize input and
 sync screen size; `upterm` just provides the secure tunnel to reach it.
 
-![Diagram: any host OS (macOS/Linux/Windows+WSL2) shares one tmux session over the upterm relay; any client OS joins over plain SSH; a raw shared pty garbles each viewer's screen while tmux inside the session keeps every screen identical.](pairing-topology.png)
+![Diagram: a host on any OS (macOS/Linux/Windows+WSL2) runs `pair`, which shares one tmux session as the unprivileged pairing user over your own relay (host key pinned, only your hosts); clients on any OS join over SSH with a key listed in team_authorized_keys, while a client with only the token is denied. Below: a raw shared pty garbles each viewer's screen, while tmux inside the session keeps every screen identical.](pairing-topology.svg)
+
+## Read this first: sharing a terminal hands out your machine
+
+> [!CAUTION]
+> **Used the way upterm's own docs show it (`upterm host`), a pairing
+> session gives everyone who joins full control of your computer, as
+> you.** This setup exists to fix that. Read this section before running
+> any installer, so you know what it puts on your machine and why.
+
+### The problem
+
+`upterm host` shares a *shell running as your own user account*. Whoever
+joins isn't watching your Claude Code pane — they're typing into that
+shell. One `Ctrl-b c` opens a new tmux window of their own, and from there
+they can do anything you can:
+
+- read your SSH keys, cloud and git credentials, `.env` files, browser
+  data, and your Claude Code login;
+- copy files off your machine (upterm allows SFTP/SCP by default), or
+  push code and deploy with your credentials;
+- use `sudo` if your account can do so without a password — and the
+  earlier Windows setup of this repo configured exactly that;
+- on Windows/WSL: read and write all of `C:` via `/mnt/c`, and start
+  `powershell.exe` as your Windows account — the whole laptop, not just
+  Linux;
+- leave something behind (a line in `~/.bashrc`, a cron job, an extra
+  key in `~/.ssh/authorized_keys`) that keeps working after the session
+  ends.
+
+And by default, *who* can join is anyone who has the session token —
+upterm doesn't check the joining key at all. A token pasted in the wrong
+chat, forwarded, or visible in a screenshot or screen share is enough. The
+relay in between can also read and type into every session (see
+[Running your own relay](#running-your-own-relay)).
+
+In security terms: an unauthenticated remote shell as your own user. On a
+developer machine with access to source code, production credentials and
+customer data, that's a serious risk, not a theoretical one.
+
+### What this setup does about it
+
+1. **Only your team can join.** `pair` only lets in keys listed in
+   [`team_authorized_keys`](team_authorized_keys), reviewed via pull
+   requests (see [Team keys](#team-keys)). The token alone is useless.
+2. **Participants never get your account.** Sessions run as a separate,
+   unprivileged `pairing` user — no sudo, no access to your home, your
+   keys or your own Claude login. On Windows that user lives in a WSL
+   distro of its own that can't see your Windows drives or start Windows
+   programs. File transfer (SFTP/SCP) is off.
+3. **Your own relay, pinned.** Sessions go through a relay you run
+   yourself instead of a public one, and its identity is pinned so it
+   can't be impersonated.
+
+### What stays open
+
+A participant *is* still the `pairing` user: they can do everything that
+user can — read and change what you cloned into its home, use its Claude
+Code login, and use any credentials you give it (so give it scoped ones).
+And whoever controls the relay can still read and type into sessions.
+Only pair with people you'd trust at your keyboard. Details:
+[Security considerations](#security-considerations--open-points).
+
+### What the installers put on your machine
+
+Both list their changes and ask before doing anything:
+
+- `tmux`, `upterm`, Node.js and Claude Code — skipped if already
+  installed, otherwise via the package manager you already have (see
+  [Install](#install));
+- a user account named `pairing`, without admin rights or a usable
+  password, that sessions run as (on Windows: a WSL distro named
+  `pairing` containing that user, with no access to Windows);
+- the `pair` command in `/usr/local/bin`, and its config (relay address,
+  pinned relay key, team keys) in `/usr/local/share/pairing`, root-owned
+  so nobody inside a session can change who may join;
+- an SSH key for the `pairing` user to log in to the relay, and the
+  relay's host key in your own `~/.ssh/known_hosts`.
+
+Nothing else on your machine is changed. The installers do *warn* if your
+own home directory is readable by other users (the `pairing` user
+included), and say how to fix it.
 
 ## Install
 
-Clone this repo first, then run the installer from a terminal inside
-`pairing-setup/` (all commands below assume you're in this folder):
+Fork or clone this repo first, then run the installer from a terminal
+inside it (all commands below assume you're in this folder):
 ```
-git clone git@bitbucket.org:eforge/collaboration-tooling.git
-cd collaboration-tooling/pairing-setup
+git clone https://github.com/johantre/pairing-setup.git
+cd pairing-setup
 ```
+One-time per team: [`relay.conf`](relay.conf) must point at your relay,
+and [`team_authorized_keys`](team_authorized_keys) must list your team —
+the installer refuses to run until `relay.conf` is filled in. A fork is the
+natural place for both: they're specific to your team.
 
 **macOS / native Linux:**
 ```
 ./install-unix.sh
 ```
+It lists what it's going to change (see
+[above](#what-the-installers-put-on-your-machine)) and asks before doing
+anything; `--yes` skips the question. It asks for your sudo password to
+create the `pairing` user and install `pair`.
+
+Tools you already have are left alone, however you installed them. Missing
+ones come from the package manager already on your machine:
+
+| | Used for tmux, Node.js | upterm |
+|---|---|---|
+| **macOS** | Homebrew, else MacPorts | Homebrew tap, else pinned GitHub release |
+| **Linux** | apt, dnf or pacman, else Homebrew | Homebrew if that's the manager used, else pinned GitHub release (`.deb` on Debian/Ubuntu) |
+
+On a Mac with neither Homebrew nor MacPorts, install one of them (most
+people use [Homebrew](https://brew.sh)) or the missing tools yourself, and
+re-run. Claude Code always comes from npm (`@anthropic-ai/claude-code`).
+Everything must be installed system-wide (not just for your account), since
+sessions run as the `pairing` user.
 
 **Windows:** `tmux` has no native Windows build (`upterm` does, but the
-session still needs `tmux`), so the session runs inside WSL2/Ubuntu.
+session still needs `tmux`), so the session runs inside WSL2.
 ```
 ./install-windows.ps1
 ```
@@ -35,47 +138,89 @@ system"*, that's its default execution policy, not a problem with the
 script — either run it once via
 `powershell -ExecutionPolicy Bypass -File .\install-windows.ps1`, or set
 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` for your account.
-This bootstraps WSL/Ubuntu if it isn't already set up (installing the WSL
-platform requires one reboot if it's genuinely your first time — the
-script tells you when to re-run it), then calls `install-unix.sh` inside
-that WSL environment. Both scripts are safe to re-run — every step skips
-work that's already done.\
-After succesful WSL installation (See Troubleshooting (Windows/WSL) section) you'll find in your IDE an "Ubuntu" in your terminal list.
 
-On Windows this means everything the script sets up — Node, Claude Code,
-and the `~/.ssh/upterm_key` below — lives *inside* that WSL/Ubuntu
-environment, separate from anything already installed on Windows itself.
-Always run `claude` and `upterm host` from that same Ubuntu terminal; a
-native PowerShell/cmd session won't have any of it. The same goes for your
-own SSH keys: WSL's `~/.ssh` is a separate folder from Windows'
-`C:\Users\<you>\.ssh`, so if you need your personal key for anything else
-inside the pairing session (e.g. `git push`), copy it into WSL's `~/.ssh`
-(or generate/register a new one there) — it won't be picked up
-automatically.
+Windows' own package managers (winget, Chocolatey, Scoop) don't come into
+it: nothing is installed on the Windows side except WSL itself, and inside
+WSL it's Ubuntu's `apt`.
 
-Either way, the install also generates a dedicated, passphrase-less SSH
-key at `~/.ssh/upterm_key` if you don't already have one — used below via
-`upterm host -i ...`. This is deliberate, not optional: without `-i`,
-`upterm host` silently falls back to your regular personal SSH identity
-(`~/.ssh/id_ed25519` etc., then your SSH agent — see `upterm host --help`),
-so skipping this step means a shared pairing session ends up authenticated
-with the same key you use for everything else.
+After asking for confirmation, this creates a **separate WSL distro named `pairing`** (an Ubuntu, next to
+any Ubuntu you may already have — that one isn't touched), then runs
+`install-unix.sh` inside it. That distro is locked down in
+`/etc/wsl.conf`: no `/mnt/c` (Windows drives aren't mounted) and no running
+Windows programs from inside it. Without that, any WSL user can read and
+write all of `C:` and start `powershell.exe` as your Windows account — so
+a participant would effectively be on your Windows machine. Installing the
+WSL platform requires one reboot if it's genuinely your first time; the
+script tells you when to re-run it.
+
+Both installers are safe to re-run — every step skips work that's already
+done. **Re-run after pulling** changes to `relay.conf` or
+`team_authorized_keys`: `pair` uses the installed copies, not the repo.
+
+> Upgrading from the earlier setup on Windows? That one ran sessions in
+> your regular `Ubuntu` distro and gave its user password-less sudo
+> (`/etc/sudoers.d/<you>`). Sessions now run in the `pairing` distro;
+> consider removing that sudoers file from your Ubuntu if you don't need it.
+
+## Team keys
+
+[`team_authorized_keys`](team_authorized_keys) lists the public keys
+allowed to join, one per line in the standard OpenSSH `authorized_keys`
+format, with a `name@device` comment so it's obvious whose key it is:
+```
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... jan@macbook
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... piet@wsl
+```
+To be able to join, generate a small dedicated key once (no passphrase, so
+joining doesn't prompt every time):
+
+**macOS / Linux / WSL:**
+```
+ssh-keygen -t ed25519 -N "" -f ~/.ssh/upterm_client_key -C "$(whoami)@$(hostname)"
+cat ~/.ssh/upterm_client_key.pub
+```
+
+**PowerShell (native Windows client):**
+```
+ssh-keygen -t ed25519 -N '""' -f $HOME\.ssh\upterm_client_key -C "$env:USERNAME@$env:COMPUTERNAME"
+Get-Content $HOME\.ssh\upterm_client_key.pub
+```
+The `-N '""'` (not `-N ""`) is deliberate: PowerShell can silently drop a
+bare empty-string argument to a native `.exe`, shifting the arguments after
+it, so `ssh-keygen` ends up misparsing the command. Passing the literal
+`""` characters through sidesteps that.
+
+Add the printed line to `team_authorized_keys` in a pull request. Removing
+someone (they left, lost a laptop) is deleting their line — effective for
+every host that has pulled and re-run the installer.
+
+Only public keys go in that file, so it's fine to commit. upterm can also
+fetch keys itself (`--github-user`, `--gitlab-user`, `--codeberg-user`,
+`--srht-user`), but a file under review works wherever your repo is hosted
+and is easier to reason about than whatever keys happen to be on
+someone's account at the moment — including an old key from a lost laptop
+nobody remembered to remove.
 
 ## Use
 
-Whoever's hosting runs, in their own terminal (a WSL terminal on Windows —
-e.g. a Windows Terminal "Ubuntu" profile, or an IDE terminal tab switched
-to WSL):
+Whoever's hosting runs, in a terminal:
 ```
-upterm host -i ~/.ssh/upterm_key --server ssh://91.98.165.67:2222 -- tmux new -s pairing
+pair
 ```
-This prints a token — share `ssh TOKEN@91.98.165.67 -p 2222` with your
-pairing partner. Once connected, run `claude` inside the session to share
-a Claude Code run.
+On Windows: `wsl -d pairing -- pair` from any terminal, or run `pair` in
+the `pairing` profile that shows up in Windows Terminal / your IDE's
+terminal list.
 
-`--server ssh://91.98.165.67:2222` points at our own self-hosted relay (see
-"Relay operations" below) rather than the public `uptermd.upterm.dev` one —
-`install-unix.sh` pins its host key for you, so this is safe to type as-is.
+upterm shows the session details and asks once whether to start sharing;
+confirm, and it prints a join command — share
+`ssh TOKEN@<relay-host> -p <port>` with your pairing partner. Anything
+after `pair` is passed on to `upterm host`, e.g. `pair --read-only` for a
+session others can only watch.
+
+The first time, log in to Claude Code inside the session (`claude`) and
+clone the repos you pair on into the `pairing` user's home — it can't see
+yours, which is the point. On Windows those files are reachable from your
+IDE as `\\wsl.localhost\pairing\home\pairing\...`.
 
 Both of you should be able to type without corrupting each other's view.
 If it still looks broken, check tmux's `window-size` session option
@@ -93,136 +238,169 @@ session, same relay, had none. Try iTerm2, Ghostty, or kitty instead.
 
 ### Joining as a participant
 
-Your pairing partner just runs the printed `ssh TOKEN@91.98.165.67 -p 2222`
-command as-is. `uptermd` accepts any key from a joining client — it only
-checks the token — but SSH still needs *some* local, unlocked key to
-complete the handshake with. If your default key (`id_ed25519`, `id_rsa`,
-...) has a passphrase, you'll be prompted for it; type it. Pressing Enter
-without knowing it fails silently into `Permission denied (publickey)`
-with no "wrong passphrase" message — if you hit that, re-run with `-v`
-first (look for an `Enter passphrase for key ...` line) before assuming
-something else is broken.
-
-This isn't actually Windows-vs-Linux, even though it can look that way:
-whether you get prompted depends on whether your default key has no
-passphrase, or an `ssh-agent` is already running with it unlocked — common
-on many Linux/WSL setups, not set up by default on a fresh Windows
-`ssh.exe` session. If you'd rather not deal with a passphrase prompt every
-time you join, generate a small dedicated, passphrase-less key just for
-this (same idea as `upterm_key` on the hosting side) and connect with
-`-i`:
+Run the printed command with the key you added to `team_authorized_keys`:
 
 **macOS / Linux / WSL:**
 ```
-ssh-keygen -t ed25519 -N "" -f ~/.ssh/upterm_client_key
-ssh -i ~/.ssh/upterm_client_key -p 2222 TOKEN@91.98.165.67
+ssh -i ~/.ssh/upterm_client_key -p <port> TOKEN@<relay-host>
 ```
 
 **PowerShell (native Windows client):**
 ```
-ssh-keygen -t ed25519 -N '""' -f $HOME\.ssh\upterm_client_key
-ssh -i $HOME\.ssh\upterm_client_key -p 2222 TOKEN@91.98.165.67
+ssh -i $HOME\.ssh\upterm_client_key -p <port> TOKEN@<relay-host>
 ```
-The `-N '""'` (not `-N ""`) is deliberate: PowerShell can silently drop a
-bare empty-string argument to a native `.exe`, shifting the arguments after
-it, so `ssh-keygen` ends up misparsing the command. Passing the literal
-`""` characters through sidesteps that.
 
-## Relay operations
+You land directly in the shared tmux session. `Permission denied
+(publickey)` means the key you offered isn't in the host's installed
+`team_authorized_keys` — check your PR is merged and the host re-ran the
+installer since. Re-run with `-v` to see which key ssh actually offered.
 
-We run our own `uptermd` relay (upterm's server component) on a Hetzner VM
-at `91.98.165.67`, replacing the public `uptermd.upterm.dev` relay as of
-2026-09-02 — see "Security considerations" below for why. The VM's firewall
-only allows inbound ports 22 (SSH admin access) and 2222 (`uptermd`'s own
-SSH listener; its websocket listener is bound to localhost only).
+The installers pin the relay's host key in your `known_hosts`. Joining
+from a native Windows PowerShell (not via WSL) isn't covered by them — add
+the pin by hand, with the values from `relay.conf`:
+```
+Add-Content $HOME\.ssh\known_hosts "[<relay-host>]:<port> <RELAY_HOST_KEY>"
+```
 
-`deploy.sh` in this folder installs/updates `uptermd` on a host over SSH:
-downloads a specific, checksum-verified release from GitHub, and runs it as
-a hardened systemd service (dedicated non-root user, `ProtectSystem=strict`,
-`NoNewPrivileges`, etc.) under a persistent host key at
-`/etc/uptermd/ssh_host_ed25519_key`.
-```
-./deploy.sh 91.98.165.67
-```
-Safe to re-run for updates — it reuses the existing host key rather than
-regenerating it (regenerating it would break every client's pinned
-`known_hosts` entry, see below).
+## Running your own relay
 
-To read the relay's current host key fingerprint (e.g. after a redeploy, to
-confirm it didn't change, or to re-pin it if it deliberately did):
+### Why not upterm's public relay
+
+upterm always goes through a relay server (`uptermd`): the host keeps an
+SSH tunnel open to it, and participants connect to the relay, not to the
+host. By default that's `uptermd.upterm.dev`, a free public relay run by
+upterm's maintainer. It works, and it's fine for a quick demo — but know
+what you're trusting:
+
+- **The relay sees everything in clear text.** Both connections are
+  encrypted, but only up to the relay: `uptermd` decrypts traffic from one
+  side and re-encrypts it for the other. It is not end-to-end encrypted.
+  So the relay can read everything on screen and everything typed — your
+  code, Claude's output, a secret you `cat` or paste.
+- **The relay can also type.** It sits in the middle of an interactive
+  shell, so whoever controls it can inject keystrokes: run commands on the
+  host as the session's user. That makes the relay part of your attack
+  surface, not just a pipe.
+- **You have no say over who controls it.** A free public service run by
+  someone outside your organisation, with no contract, no audit, and no
+  notice if it's compromised or changes hands. It's also a shared target:
+  breaking into one public relay exposes every session on it.
+- **Anyone can pose as it.** Your first connection to a relay asks you to
+  accept its host key without anything to compare against. On a hostile
+  network (hotel wifi, a DNS hijack, a proxy that intercepts SSH) you
+  could be accepting an attacker's relay, which then gets all of the
+  above.
+- **Availability.** If it's down or rate-limited, nobody can pair.
+
+### What running your own relay fixes
+
+- **The relay operator is you.** The relay runs on a server your
+  organisation controls, so seeing and typing into sessions is limited to
+  people who already have access to that server — the same trust you
+  place in your other infrastructure.
+- **Its identity is pinned.** Its host key is in [`relay.conf`](relay.conf)
+  and installed into everyone's `known_hosts`, so an impersonated relay
+  gets a hard error instead of a yes/no prompt.
+- **Only your hosts can use it** (optional, recommended — step 4 below),
+  so it's not an open relay for anyone on the internet.
+
+What it doesn't fix: the relay still decrypts sessions — that's how upterm
+works. Keep the relay server locked down (firewall, patched, few admins),
+because whoever gets into it gets into every session.
+
+### Setting it up
+
+It's a single Go binary with one SSH port; any small Linux VM with a
+public IP will do (any cloud provider — the cheapest tier is plenty).
+
+upterm's own docs list several ways to deploy it — a Helm chart for
+Kubernetes, Fly.io, Heroku, Docker Compose behind Traefik, and a hardened
+systemd unit: see
+[Deploy Uptermd](https://github.com/owenthereal/upterm#deploy-uptermd).
+Pick whichever fits what you already run. This repo's
+[`deploy.sh`](deploy.sh) is the systemd route, scripted:
+
+1. **Create the VM** and open inbound TCP **2222** (uptermd) plus your
+   admin SSH port in its firewall. Nothing else needs to be reachable.
+2. **Deploy** from your machine, over SSH as root (or a sudo user, `-u`):
+   ```
+   ./deploy.sh <relay-ip>
+   ```
+   It downloads a specific, checksum-verified `uptermd` release from
+   GitHub and runs it as a sandboxed systemd service (dedicated non-root
+   user, `ProtectSystem=strict`, `NoNewPrivileges`, ...) with a persistent
+   host key in `/etc/uptermd/`. It ends by printing that host key as a
+   ready-to-paste `RELAY_HOST_KEY="..."` line. Safe to re-run for updates:
+   it reuses the host key rather than regenerating it (a new one would
+   break every client's pinned `known_hosts` entry).
+3. **Fill in [`relay.conf`](relay.conf)** — `RELAY_HOST`, `RELAY_PORT`,
+   `RELAY_HOST_KEY` — and commit it. Before you do, confirm the key from a
+   *different network* than the one you deployed from:
+   ```
+   ssh-keyscan -p 2222 -t ed25519 <relay-ip>
+   ```
+   Both should match; if they don't, something between you and the relay
+   is rewriting traffic.
+4. **Recommended: restrict who can host.** By default any upterm client
+   that reaches port 2222 can host sessions on your relay. To allow only
+   your team's hosts, collect the relay login keys the installer prints
+   on each host (the `pairing` user's `~/.ssh/upterm_key.pub`) into an
+   `authorized_keys`-format file and deploy with it:
+   ```
+   ./deploy.sh <relay-ip> --authorized-hosts relay_authorized_hosts
+   ```
+   It's kept on the relay; later deploys without the option keep using
+   it. A host that isn't listed can't start a session there anymore, so
+   add new hosts to it before they try.
+
+To read the relay's host key again later (e.g. to confirm a redeploy
+didn't change it):
 ```
-ssh root@91.98.165.67 'ssh-keygen -lf /etc/uptermd/ssh_host_ed25519_key.pub'
+ssh root@<relay-ip> 'ssh-keygen -lf /etc/uptermd/ssh_host_ed25519_key.pub'
 ```
+If it ever changes on purpose, update `relay.conf` and have everyone
+re-run the installer, or joins will hard-fail with `REMOTE HOST
+IDENTIFICATION HAS CHANGED` (correctly — but confusingly, if nobody
+expects it).
 
 ## Security considerations — open points
 
-- **Self-hosting removes the third-party-relay concern, but not the
-  plaintext-bridging architecture itself.** `upterm host` starts an SSH
-  server on the host machine and opens a reverse SSH tunnel to the relay;
-  joining clients then connect to that same relay over a second, separate
-  SSH connection. Each leg (host↔relay, client↔relay) is its own
-  SSH-encrypted connection, but that means `uptermd` itself terminates both
-  and bridges them internally — whoever operates the relay has plaintext
-  access to session content by design, the same trust model as any SSH
-  bastion/jump host. This isn't "end-to-end encrypted" in the sense of the
-  relay being cryptographically blind to content. Running our own relay (as
-  of 2026-09-02) closes off the part of this that mattered most — an
-  unknown external operator with that access — since the operator is now
-  Acme itself, under the same trust boundary as everything else pairing
-  sessions touch. It does not change the architecture: anyone with access
-  to the relay VM still has the same plaintext access an external operator
-  would have had.
-- **On-path impersonation of the relay is mitigated.** Without a pinned
-  host key, joining is TOFU (trust-on-first-use) with nothing in
-  `known_hosts` to compare against — so the usual SSH "are you sure you
-  want to continue connecting?" prompt offers no real protection: it looks
-  identical whether you're really talking to our relay or to an attacker
-  who spoofed it via DNS hijack, a malicious/compromised wifi network, or a
-  corporate proxy doing SSH interception. `install-unix.sh`'s
-  `pin_relay_host_key` step closes this by pre-populating `known_hosts`
-  with the relay's SSH host key, verified independently via `ssh-keyscan`
-  on 2026-09-02: `SHA256:pYrnuh9FobCrFEU2wnsP1c39ZNeFmaqypzkeMwGfnG8`
-  (ed25519) — matching the fingerprint read directly off the VM (see "Relay
-  operations" above). This is the relay's own fixed key — confirmed stable
-  across repeated scans, which makes sense since SSH's key exchange happens
-  before the client sends its session token, so every connection to that
-  host:port gets the same key regardless of which session it's joining.
-  With this pinned, a real impersonation attempt gets a hard `REMOTE HOST
-  IDENTIFICATION HAS CHANGED` failure instead of a blind prompt. Native
-  Windows PowerShell clients (not going through WSL) aren't covered by the
-  install script — add the pin by hand:
-  ```
-  Add-Content $HOME\.ssh\known_hosts "[91.98.165.67]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDtlgjADMQEivVXXUBk+xNM4wE7LZzye+nc6xjZ0maP5"
-  ```
-  Caveat: this fingerprint was captured from one vantage point (this repo's
-  dev machine, this date) — it protects against an attacker between *you*
-  and the relay, not against a compromise that happened before that
-  capture. Worth having someone else independently `ssh-keyscan` it from a
-  different network and confirm the same value before treating it as fully
-  trusted. If the relay is ever redeployed with a new host key, every
-  client's pinned `known_hosts` entry needs updating to match, or joins
-  will hard-fail with `REMOTE HOST IDENTIFICATION HAS CHANGED` (correctly —
-  but confusingly, if nobody expects it).
-- **`deploy.sh` hasn't been independently reviewed or hardened-tested
-  beyond initial setup.** It downloads a checksummed release and applies
-  reasonable systemd sandboxing, but treat it as a starting point, not an
-  audited artifact — re-review it before relying on it for anything beyond
-  this relay.
-- **The passphrase-less SSH key.** `setup_upterm_key` generates
-  `~/.ssh/upterm_key` without a passphrase so `upterm host -i ...` can run
-  non-interactively. It's a dedicated key (see "Install" above), so a leak
-  doesn't cascade to other systems, but anyone who gets local read access
-  to that file (malware, an unlocked/stolen machine, a careless backup)
-  can use it immediately, without needing to crack a passphrase. If that
-  risk matters more than the convenience, add a passphrase and load the
-  key into `ssh-agent` instead.
+- **Participants are the `pairing` user.** Everything that user can do,
+  every participant can do: read and change the repos in its home, use
+  its Claude Code login (so they can run Claude on your subscription or
+  API key, and read its token), and use any git credentials you give it.
+  Give it only what a pairing session needs — e.g. a repo-scoped deploy
+  key or fine-grained token for pushing, not your personal key. Anything
+  a participant leaves behind in its home (a `~/.bashrc` line) runs in
+  later sessions as that user; if in doubt, recreate the user (or on
+  Windows: `wsl --unregister pairing` and re-run the installer).
+- **The relay sees everything, even your own.** See
+  [Why not upterm's public relay](#why-not-upterms-public-relay): running
+  your own makes the operator yourself, it doesn't make the relay blind.
+  Keep the relay VM locked down accordingly.
+- **The host-key pin only protects what it was checked against.** It
+  stops anyone between *you* and the relay from impersonating it, but if
+  the key was captured through an already-compromised path, you've pinned
+  the attacker. Hence the check from a second network in
+  [Running your own relay](#running-your-own-relay).
+- **`deploy.sh` hasn't been independently reviewed** beyond initial
+  setup. It downloads a checksummed release and applies reasonable systemd
+  sandboxing, but treat it as a starting point, not an audited artifact.
+- **Passphrase-less keys.** The host's `upterm_key` (relay login) has no
+  passphrase so `pair` starts non-interactively, and it lives in the
+  `pairing` user's home — assume past participants have it. On a relay
+  with `--authorized-hosts` that means they could host sessions on your
+  relay; rotate it (delete it, re-run the installer, update the relay's
+  list) if that matters. Participants' `upterm_client_key` is equally
+  usable by anyone who gets a copy of the file; its line in
+  `team_authorized_keys` is what to delete when that happens.
 
 ## Troubleshooting (Windows/WSL)
 
 These are real failures hit while building this script, not hypotheticals:
 
 - **`Catastrophic failure` / `Wsl/Service/E_UNEXPECTED` when launching
-  Ubuntu, even right after a reboot, even as `--user root`:** the
+  the distro, even right after a reboot, even as `--user root`:** the
   installed WSL core package was stale (kernel 5.15) and incompatible
   with a "modern"-registration Ubuntu distro. `wsl --update` (pulls a
   current core+kernel) + `wsl --shutdown` fixed it outright. This is step
@@ -230,12 +408,12 @@ These are real failures hit while building this script, not hypotheticals:
   Windows once and re-run the script.
 - **The first-run username/password wizard hangs or crashes:** confirmed
   via Windows Error Reporting to be `wslsettings.exe` crashing outright,
-  not just a slow prompt. `install-windows.ps1` never relies on it — it
-  creates the default user by hand as root instead
-  (`useradd`/`usermod`/`sudoers.d`, then `wsl --manage ... --set-default-user`).
-  If you're debugging this by hand: `HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss\{...}`
-  has a `RunOOBE` value that stays `1` even after this workaround — that's
-  expected, it's simply never triggered again once a default user exists.
+  not just a slow prompt. `install-windows.ps1` never relies on it —
+  everything runs as root and `install-unix.sh` creates the `pairing`
+  user itself.
+- **`/mnt/c` is empty and `explorer.exe` / `code .` don't work in the
+  `pairing` distro:** intended — see [Install](#install). Reach its files
+  from Windows via `\\wsl.localhost\pairing\` instead.
 - **Don't use the Windows-side Node/npm from inside WSL** (e.g. an
   `nvm-windows` install reachable via `/mnt/c/...` through WSL interop) —
   it can resolve `npm` on `PATH` with no matching `node` binary, and

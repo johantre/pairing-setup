@@ -15,11 +15,16 @@
 #   -a, --arch ARCH       amd64 | arm64 | ppc64le | s390x (default: detect on host)
 #       --ssh-addr ADDR   uptermd ssh listen address (default: 0.0.0.0:2222)
 #       --ws-addr ADDR    uptermd websocket listen address (default: 127.0.0.1:8080)
+#       --authorized-hosts FILE
+#                         authorized_keys file of the upterm host keys allowed
+#                         to host sessions on this relay. Stored on the relay;
+#                         later deploys without this option keep using it.
 #   -h, --help            Show this help
 #
 # Examples:
-#   ./deploy.sh 91.98.165.67
-#   ./deploy.sh 91.98.165.67 --user root --version 0.24.0
+#   ./deploy.sh 203.0.113.10
+#   ./deploy.sh 203.0.113.10 --user root --version 0.24.0
+#   ./deploy.sh 203.0.113.10 --authorized-hosts relay_authorized_hosts
 
 set -euo pipefail
 
@@ -29,10 +34,11 @@ VERSION="latest"
 ARCH=""
 UPTERMD_SSH_ADDR="0.0.0.0:2222"
 UPTERMD_WS_ADDR="127.0.0.1:8080"
+AUTHORIZED_HOSTS_FILE=""
 HOST=""
 
 usage() {
-  sed -n '3,22p' "$0" | sed 's/^# \{0,1\}//;s/^#$//'
+  sed -n '3,27p' "$0" | sed 's/^# \{0,1\}//;s/^#$//'
   exit "${1:-0}"
 }
 
@@ -46,6 +52,7 @@ while [[ $# -gt 0 ]]; do
     -a|--arch)     ARCH="${2:?missing value for $1}"; shift 2 ;;
     --ssh-addr)    UPTERMD_SSH_ADDR="${2:?missing value for $1}"; shift 2 ;;
     --ws-addr)     UPTERMD_WS_ADDR="${2:?missing value for $1}"; shift 2 ;;
+    --authorized-hosts) AUTHORIZED_HOSTS_FILE="${2:?missing value for $1}"; shift 2 ;;
     -h|--help)     usage 0 ;;
     -*)            die "unknown option: $1" ;;
     *)
@@ -56,10 +63,19 @@ done
 
 [[ -n "$HOST" ]] || { echo "error: missing <ip-address>" >&2; echo >&2; usage 1; }
 
+# Passed along base64-encoded in the environment: stdin is already taken by
+# the remote script itself.
+AUTHORIZED_HOSTS_B64=""
+if [[ -n "$AUTHORIZED_HOSTS_FILE" ]]; then
+  grep -qE '^[[:space:]]*(ssh-|ecdsa-|sk-)' "$AUTHORIZED_HOSTS_FILE" \
+    || die "$AUTHORIZED_HOSTS_FILE has no keys — that would lock every host out"
+  AUTHORIZED_HOSTS_B64="$(tr -d '\r' < "$AUTHORIZED_HOSTS_FILE" | base64 | tr -d '\n')"
+fi
+
 echo "==> Deploying uptermd ($VERSION) to ${SSH_USER}@${HOST}:${SSH_PORT}"
 
 ssh -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new "${SSH_USER}@${HOST}" \
-  "VERSION='$VERSION' ARCH='$ARCH' UPTERMD_SSH_ADDR='$UPTERMD_SSH_ADDR' UPTERMD_WS_ADDR='$UPTERMD_WS_ADDR' bash -s" <<'REMOTE'
+  "VERSION='$VERSION' ARCH='$ARCH' UPTERMD_SSH_ADDR='$UPTERMD_SSH_ADDR' UPTERMD_WS_ADDR='$UPTERMD_WS_ADDR' AUTHORIZED_HOSTS_B64='$AUTHORIZED_HOSTS_B64' bash -s" <<'REMOTE'
 set -euo pipefail
 
 SUDO=""
@@ -125,6 +141,22 @@ if [[ ! -f /etc/uptermd/ssh_host_ed25519_key ]]; then
   $SUDO chmod 0600 /etc/uptermd/ssh_host_ed25519_key
 fi
 
+# --- which hosts may register sessions ---------------------------------------
+# Without an allowlist, anyone who can reach the SSH port can host their own
+# sessions on this relay; with one, only the listed upterm host keys can.
+if [[ -n "${AUTHORIZED_HOSTS_B64}" ]]; then
+  echo "--> Installing /etc/uptermd/authorized_hosts"
+  echo "${AUTHORIZED_HOSTS_B64}" | base64 -d | $SUDO tee /etc/uptermd/authorized_hosts >/dev/null
+  $SUDO chown uptermd:uptermd /etc/uptermd/authorized_hosts
+  $SUDO chmod 0640 /etc/uptermd/authorized_hosts
+fi
+AUTHORIZED_KEYS_ARG=""
+if [[ -f /etc/uptermd/authorized_hosts ]]; then
+  AUTHORIZED_KEYS_ARG="--authorized-keys /etc/uptermd/authorized_hosts"
+else
+  echo "    note: no /etc/uptermd/authorized_hosts, so any host can register sessions" >&2
+fi
+
 # --- systemd unit ------------------------------------------------------------
 echo "--> Writing systemd unit"
 $SUDO tee /etc/systemd/system/uptermd.service >/dev/null <<UNIT
@@ -140,7 +172,7 @@ Group=uptermd
 ExecStart=/usr/local/bin/uptermd \\
   --ssh-addr ${UPTERMD_SSH_ADDR} \\
   --ws-addr ${UPTERMD_WS_ADDR} \\
-  --private-key /etc/uptermd/ssh_host_ed25519_key
+  --private-key /etc/uptermd/ssh_host_ed25519_key ${AUTHORIZED_KEYS_ARG}
 Restart=on-failure
 RestartSec=5s
 AmbientCapabilities=CAP_NET_BIND_SERVICE
@@ -165,6 +197,10 @@ echo
 echo "Installed: $(/usr/local/bin/uptermd version | sed -n 1p)"
 echo "  ssh-addr: ${UPTERMD_SSH_ADDR}"
 echo "  ws-addr:  ${UPTERMD_WS_ADDR}"
+echo
+echo "Relay host key for relay.conf (verify it from a second network too):"
+echo "  RELAY_HOST_KEY=\"$(cut -d' ' -f1,2 /etc/uptermd/ssh_host_ed25519_key.pub)\""
+echo "  fingerprint: $(ssh-keygen -lf /etc/uptermd/ssh_host_ed25519_key.pub)"
 REMOTE
 
 echo "==> Done. uptermd is running on ${HOST}"

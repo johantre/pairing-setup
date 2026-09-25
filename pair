@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+#
+# Starts a shared pairing session: tmux inside `upterm host`, on the team's
+# own relay, joinable only with a key listed in the team's authorized_keys.
+#
+# Usage: pair [extra `upterm host` flags, e.g. --read-only]
+#
+# Installed to /usr/local/bin by install-unix.sh, together with its config in
+# /usr/local/share/pairing (root-owned, so nobody inside a session can edit
+# who may join or which relay host key is trusted).
+set -euo pipefail
+
+CONF_DIR="/usr/local/share/pairing"
+PAIRING_USER="pairing"
+SESSION="pairing"
+
+err() { printf '\033[31m%s\033[0m\n' "$*" >&2; }
+
+# Anyone who joins gets a full shell as whichever user runs the session, not
+# just a view of the tmux pane you're looking at. So never run it as you:
+# always as the dedicated, unprivileged pairing user.
+if [ "$(id -un)" != "$PAIRING_USER" ]; then
+  exec sudo -u "$PAIRING_USER" -H env PATH="$PATH" /usr/local/bin/pair "$@"
+fi
+
+# shellcheck source=relay.conf
+. "$CONF_DIR/relay.conf"
+
+if ! grep -qE '^[[:space:]]*(ssh-|ecdsa-|sk-)' "$CONF_DIR/authorized_keys"; then
+  err "No keys in $CONF_DIR/authorized_keys, so nobody could join."
+  err "Add your team's keys to team_authorized_keys and re-run the installer."
+  exit 1
+fi
+
+cd "$HOME"
+exec upterm host \
+  -i "$HOME/.ssh/upterm_key" \
+  --server "ssh://$RELAY_HOST:$RELAY_PORT" \
+  --known-hosts "$CONF_DIR/known_hosts" \
+  --authorized-keys "$CONF_DIR/authorized_keys" \
+  --no-sftp \
+  --force-command "tmux attach -t $SESSION" \
+  "$@" \
+  -- tmux new -A -s "$SESSION"
