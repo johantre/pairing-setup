@@ -111,9 +111,15 @@ not a theoretical one.
 
 Details: [Security considerations](#security-considerations--open-points).
 
-### What the installers put on your machine
+### What the installers put on the host machine
 
-Both list their changes and ask before doing anything:
+The installers are for **hosts**: the machine a session runs on. Only
+joining other people's sessions? You don't need them at all — an SSH
+client, which every OS ships with, and a key in the team list are enough
+(see [Joining as a participant](#joining-as-a-participant)).
+
+On a host, both installers list their changes and ask before doing
+anything:
 
 - `tmux`, `upterm`, `node` and Claude Code (`claude`) — skipped if already
   installed, otherwise via the package manager you already have (see
@@ -127,11 +133,15 @@ Both list their changes and ask before doing anything:
 - an SSH key for the `pairing` user to log in to the relay, and the
   relay's host key in your own `~/.ssh/known_hosts`.
 
-Nothing else on your machine is changed. The installers do *warn* if your
+Nothing else on the host is changed. The installers do *warn* if your
 own home directory is readable by other users (the `pairing` user
 included), and say how to fix it.
 
 ## Install
+
+This sets up a **host**: a machine you'll start pairing sessions from.
+Only joining? Skip to [Team keys](#team-keys) and
+[Joining as a participant](#joining-as-a-participant).
 
 ### Once per team
 
@@ -158,7 +168,7 @@ to keep them.
   ./install-unix.sh
   ```
   - It lists what it's going to change (see
-    [above](#what-the-installers-put-on-your-machine)) and asks before
+    [above](#what-the-installers-put-on-the-host-machine)) and asks before
     doing anything; `--yes` skips the question.
   - It asks for your `sudo` password, to create the `pairing` user and
     install `pair`.
@@ -296,7 +306,26 @@ session, same relay, had none. Try iTerm2, Ghostty, or kitty instead.
 
 ### Joining as a participant
 
-Run the printed command with the key you added to `team_authorized_keys`:
+Nothing to install: you need an SSH client (built into macOS, Linux and
+Windows 10+) and a key listed in `team_authorized_keys` (see
+[Team keys](#team-keys)).
+
+**Once: pin the relay's host key**, with the values from `relay.conf`, so
+`ssh` can tell the real relay from an impersonator. Hosts who ran the
+installer already have this.
+
+**macOS / Linux / WSL:**
+```
+echo "[<relay-host>]:<port> <RELAY_HOST_KEY>" >> ~/.ssh/known_hosts
+```
+
+**PowerShell (native Windows client):**
+```
+Add-Content $HOME\.ssh\known_hosts "[<relay-host>]:<port> <RELAY_HOST_KEY>"
+```
+
+**Then, for each session**, run the command the host shares, with the
+key you added to `team_authorized_keys`:
 
 **macOS / Linux / WSL:**
 ```
@@ -312,13 +341,6 @@ You land directly in the shared `tmux` session. `Permission denied
 (publickey)` means the key you offered isn't in the host's installed
 `team_authorized_keys` — check your PR is merged and the host re-ran the
 installer since. Re-run with `-v` to see which key `ssh` actually offered.
-
-The installers pin the relay's host key in your `known_hosts`. Joining
-from a native Windows PowerShell (not via WSL) isn't covered by them — add
-the pin by hand, with the values from `relay.conf`:
-```
-Add-Content $HOME\.ssh\known_hosts "[<relay-host>]:<port> <RELAY_HOST_KEY>"
-```
 
 ## Running your own relay
 
