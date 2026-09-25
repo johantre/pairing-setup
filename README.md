@@ -269,9 +269,19 @@ the rest of this README assumes it:
 
 1. **Create the VM** and open inbound TCP **2222** (`uptermd`) plus your
    admin SSH port in its firewall. Nothing else needs to be reachable.
+   - Its public address is what everyone will connect to. A DNS name
+     (e.g. `relay.example.com`) is handier than a bare IP: if the relay
+     ever moves to another VM (taking its server key along), nothing
+     changes for anyone. Whichever you pick, use that same form
+     everywhere — `known_hosts` matches the exact name or IP.
+   - Why 2222 and not 22: port 22 is taken by the VM's own SSH server,
+     the one admins log in with. Any free port works (443 gets through
+     more corporate firewalls), as long as it's the same in three places:
+     `deploy.sh --ssh-addr 0.0.0.0:<port>`, the VM's firewall, and
+     `RELAY_PORT`.
 2. **Deploy** from your machine, over SSH as `root` (or a sudo user, `-u`):
    ```
-   ./deploy.sh <relay-ip>
+   ./deploy.sh <relay-host>
    ```
    - It downloads a specific, checksum-verified `uptermd` release from
      GitHub and runs it as a sandboxed systemd service (dedicated non-root
@@ -282,15 +292,45 @@ the rest of this README assumes it:
      this point, so the relay starts **closed**: nobody can host yet.
    - Safe to re-run for updates: it keeps the server key (a new one would
      break everyone's pinned `known_hosts` entry).
-3. **Fill in `relay.conf`** in your pairing-config — `RELAY_HOST`,
-   `RELAY_PORT`, `RELAY_SERVER_KEY` — and commit it. Before you do,
-   confirm the key from a *different network* than the one you deployed
-   from:
-   ```
-   ssh-keyscan -p 2222 -t ed25519 <relay-ip>
-   ```
-   Both should match; if they don't, something between you and the relay
-   is rewriting traffic.
+3. **Fill in `relay.conf`** in your pairing-config and commit it:
+   - `RELAY_HOST`: the relay's address from step 1 — the same one you
+     passed to `deploy.sh`.
+   - `RELAY_PORT`: `uptermd`'s port, `2222` unless you changed it.
+   - `RELAY_SERVER_KEY`: the line `deploy.sh` printed at the end.
+4. **Double-check the server key over a different path** before anyone
+   relies on it. `deploy.sh` printed it over *your* network connection; if
+   something on that network intercepts SSH (a corporate proxy, a
+   compromised router, a hijacked DNS entry), it could show you its own key
+   there and again on every check you make from the same network — you'd
+   be comparing the attacker with itself. So check from somewhere that
+   attacker is unlikely to also sit:
+   - **Best:** your cloud provider's web console, which doesn't go over
+     SSH at all. Open a console on the VM and run
+     `ssh-keygen -lf /etc/uptermd/ssh_host_ed25519_key.pub`; compare the
+     fingerprint with the one `deploy.sh` printed.
+   - **Otherwise:** from another network (e.g. your phone's hotspot
+     instead of the office network):
+     ```
+     ssh-keyscan -p 2222 -t ed25519 <relay-host>
+     ```
+
+   If they don't match, don't commit it: something between you and the
+   relay is rewriting traffic.
+
+### One relay per group that trusts each other
+
+One pairing-config means one relay with one `team_authorized_keys`
+list. Everyone on that list can join *any* session on that relay, as
+long as they get hold of its token — and a token is only an address: it
+leaks through a shared chat channel, a forwarded message, a screenshot.
+
+- **If the people on the list trust each other** (one company, similar
+  work), one relay and one pairing-config for all of them is fine, and
+  the simplest to run. Outsiders stay out either way.
+- **If a group must be kept apart** (customer data with stricter rules,
+  another company), give it its own relay and its own pairing-config.
+  That also keeps it out of view of the other relay's admins, who can see
+  every session on their relay.
 
 ### Letting hosts in
 
@@ -298,7 +338,7 @@ When a new host's relay login key is merged into `relay_authorized_hosts`
 (see [step 3](#3-install-a-host)), the relay admin pulls pairing-config
 and applies the list:
 ```
-./deploy.sh <relay-ip> --hosts-only
+./deploy.sh <relay-host> --hosts-only
 ```
 That only uploads the list and restarts `uptermd` — it reads the list once
 at startup. The restart **drops sessions in progress**, so do it when
@@ -308,7 +348,7 @@ merge, apply.
 To read the relay's server key again later (e.g. to confirm a redeploy
 didn't change it):
 ```
-ssh root@<relay-ip> 'ssh-keygen -lf /etc/uptermd/ssh_host_ed25519_key.pub'
+ssh root@<relay-host> 'ssh-keygen -lf /etc/uptermd/ssh_host_ed25519_key.pub'
 ```
 If it ever changes on purpose, update `relay.conf` and have everyone
 re-pin it, or connections will hard-fail with `REMOTE HOST IDENTIFICATION
