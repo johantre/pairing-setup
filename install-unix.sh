@@ -56,7 +56,12 @@ if [ -z "${RELAY_HOST:-}" ] || [ -z "${RELAY_PORT:-}" ] || [ -z "${RELAY_SERVER_
   err "The relay comes first — see the README's \"2. Run your own relay\"."
   exit 1
 fi
-RELAY_PIN="[$RELAY_HOST]:$RELAY_PORT $RELAY_SERVER_KEY"
+# known_hosts writes port 22 as a bare host name, any other port as [host]:port.
+if [ "$RELAY_PORT" = 22 ]; then
+  RELAY_PIN="$RELAY_HOST $RELAY_SERVER_KEY"
+else
+  RELAY_PIN="[$RELAY_HOST]:$RELAY_PORT $RELAY_SERVER_KEY"
+fi
 
 # Talks to the relay before anything is installed: is it up, and does it
 # present the server key from relay.conf? A wrong key means a typo in

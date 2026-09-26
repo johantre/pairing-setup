@@ -142,20 +142,24 @@ Two lists, two gates:
 - **Relay admin** — whoever runs the relay server. Usually one or two
   people; they have `root` on it.
 - **Host** — anyone who starts pairing sessions from their machine.
-- **Participant** — anyone who joins them. Needs nothing installed.
+- **Participant** — anyone who joins them. Needs nothing installed, only
+  a clone of the team's pairing-config, which has the `join` command.
 
 One person can have several roles.
 
 ### Two repos
 
 - **[pairing-setup](https://github.com/johantre/pairing-setup)** (this
-  one, public): the tools. Use it as is; `git pull` for updates.
+  one, public): the tools for hosts and relay admins. Use it as is;
+  `git pull` for updates.
 - **[pairing-config](https://github.com/johantre/pairing-config)**
   (public template): your team's data — relay address, who may host, who
-  may join. Each team makes a **private** copy of it.
+  may join — plus the `join` command for participants. Each team makes a
+  **private** copy of it.
 
-Clone both next to each other; the scripts find the config there by
-default (or pass `--config <path>`):
+Participants only need pairing-config. Hosts and relay admins clone both,
+next to each other; the scripts find the config there by default (or pass
+`--config <path>`):
 ```
 your-folder/
 ├── pairing-setup/     ← the tools (public)
@@ -473,29 +477,22 @@ format, with a `name@device` comment so it's obvious whose key it is:
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... jan@macbook
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... piet@wsl
 ```
-To be able to join, generate a small dedicated client key once (no
-passphrase, so joining doesn't prompt every time):
+A new participant:
 
-**macOS / Linux / WSL:**
-```
-ssh-keygen -t ed25519 -N "" -f ~/.ssh/upterm_client_key -C "$(whoami)@$(hostname)"
-cat ~/.ssh/upterm_client_key.pub
-```
+1. **Clones the team's pairing-config** (read access is enough; the pull
+   request below can come from a fork or a branch).
+2. **Runs `join` once, without a token**, from inside that folder:
+   - macOS / Linux / WSL: `./join`
+   - Windows (PowerShell, no WSL needed): `.\join.ps1`
 
-**PowerShell (native Windows client):**
-```
-ssh-keygen -t ed25519 -N '""' -f $HOME\.ssh\upterm_client_key -C "$env:USERNAME@$env:COMPUTERNAME"
-Get-Content $HOME\.ssh\upterm_client_key.pub
-```
-The `-N '""'` (not `-N ""`) is deliberate: PowerShell can silently drop a
-bare empty-string argument to a native `.exe`, shifting the arguments after
-it, so `ssh-keygen` ends up misparsing the command. Passing the literal
-`""` characters through sidesteps that.
+   It creates a dedicated client key (`~/.ssh/upterm_client_key`, no
+   passphrase so joining doesn't prompt every time), pins the relay's
+   server key, and prints the line to add to the team list.
+3. **Adds that line to `team_authorized_keys`** in a pull request.
 
-Add the printed line to `team_authorized_keys` in a pull request. Hosts
-pick it up by pulling pairing-config and re-running their installer.
-Removing someone (they left, lost a laptop) is deleting their line, the
-same way.
+Once it's merged, hosts pick it up by pulling pairing-config and
+re-running their installer. Removing someone (they left, lost a laptop)
+is deleting their line, the same way.
 
 `upterm` can also fetch keys itself (`--github-user`, `--gitlab-user`,
 `--codeberg-user`, `--srht-user`), but a reviewed file works wherever your
@@ -517,7 +514,8 @@ terminal list.
 
 `upterm` shows the session details and asks once whether to start sharing;
 confirm, and it prints a join command — share
-`ssh TOKEN@<relay-host> -p <port>` with your pairing partner. Anything
+`ssh TOKEN@<relay-host> -p <port>` with your pairing partner, who pastes
+it into `join` (see below). Anything
 after `pair` is passed on to `upterm host`, e.g. `pair --read-only` for a
 session others can only watch.
 
@@ -542,41 +540,38 @@ session, same relay, had none. Try iTerm2, Ghostty, or kitty instead.
 
 ### Joining as a participant
 
-Nothing to install: you need an SSH client (built into macOS, Linux and
-Windows 10+) and a key listed in `team_authorized_keys` (see
-[step 4](#4-add-participants)).
-
-**Once: pin the relay's server key**, with the values from `relay.conf`,
-so `ssh` can tell the real relay from an impersonator. Hosts who ran the
-installer already have this.
+Nothing to install: an SSH client (built into macOS, Linux and Windows
+10+) and your team's pairing-config are all you need (see
+[step 4](#4-add-participants) for the one-time part). From the
+pairing-config folder, pass `join` the token the host shared — or paste
+the whole command they shared, quotes around it:
 
 **macOS / Linux / WSL:**
 ```
-echo "[<relay-host>]:<port> <RELAY_SERVER_KEY>" >> ~/.ssh/known_hosts
+./join <token>
+./join "ssh <token>@<relay-host> -p <port>"
 ```
 
-**PowerShell (native Windows client):**
+**Windows (PowerShell):**
 ```
-Add-Content $HOME\.ssh\known_hosts "[<relay-host>]:<port> <RELAY_SERVER_KEY>"
-```
-
-**Then, for each session**, run the command the host shares, with your
-client key:
-
-**macOS / Linux / WSL:**
-```
-ssh -i ~/.ssh/upterm_client_key -p <port> TOKEN@<relay-host>
+.\join.ps1 <token>
+.\join.ps1 "ssh <token>@<relay-host> -p <port>"
 ```
 
-**PowerShell (native Windows client):**
-```
-ssh -i $HOME\.ssh\upterm_client_key -p <port> TOKEN@<relay-host>
-```
+Every run first checks the one-time setup (client key, pinned relay
+server key, your key on the team list) and redoes whatever is missing,
+then connects with the right key, host and port. It refuses a command
+that points to a different relay than the one in `relay.conf`.
 
 You land directly in the shared `tmux` session. `Permission denied
-(publickey)` means the key you offered isn't in the host's installed
-`team_authorized_keys` — check your PR is merged and the host re-ran the
-installer since. Re-run with `-v` to see which key `ssh` actually offered.
+(publickey)` means your key isn't in the host's installed
+`team_authorized_keys` yet — check your PR is merged and the host pulled
+and re-ran the installer since.
+
+If PowerShell refuses with *"running scripts is disabled on this
+system"*: run it once via
+`powershell -ExecutionPolicy Bypass -File .\join.ps1 <token>`, or set
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` for your account.
 
 ## Security considerations — open points
 
