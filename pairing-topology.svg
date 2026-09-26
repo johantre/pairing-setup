@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1400" viewBox="0 0 1280 1400" role="img" aria-labelledby="t d">
   <title id="t">Pairing setup: how it connects</title>
-  <desc id="d">A host on macOS, Linux or Windows with WSL2 runs `pair`, which starts one shared tmux session as the unprivileged pairing user and connects it to your own uptermd relay with a pinned server key. Clients on any OS join over SSH with a key listed in team_authorized_keys; a client with only the token is denied. Below: a raw shared pty garbles each viewer's screen, while tmux inside the session keeps every screen identical.</desc>
+  <desc id="d">A host on macOS, Linux or Windows with WSL2 runs `pair`, which starts one shared tmux session as the unprivileged pairing user and connects it to your own uptermd relay with a pinned server key. Clients on any OS join with the join command over SSH, with a key listed in team_authorized_keys, which the relay enforces; a client with only the token is denied. Below: a raw shared pty garbles each viewer's screen, while tmux inside the session keeps every screen identical.</desc>
   <defs>
     <style>
       .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
@@ -67,28 +67,29 @@
   <line x1="394" y1="424" x2="602" y2="424" stroke="#e2ddd3"/>
   <g class="mono" font-size="11" fill="#2b2926">
     <text x="392" y="444">runs as user <tspan font-weight="700">pairing</tspan>:</text>
-    <text x="392" y="461" fill="#5b5650">  no sudo, can't read your home</text>
+    <text x="392" y="461" fill="#5b5650">  not your account, no sudo</text>
     <text x="392" y="478" fill="#5b5650">  Windows: no C:, no Windows apps</text>
-    <text x="392" y="500">joins: team_authorized_keys</text>
+    <text x="392" y="500">join list: team_authorized_keys</text>
     <text x="392" y="517">file transfer: off</text>
-    <text x="392" y="539" fill="#5b5650">tmux new -s pairing</text>
+    <text x="392" y="539" fill="#5b5650">tmux new -A -s pairing</text>
   </g>
 
   <!-- Session <-> relay -->
   <line x1="626" y1="458" x2="672" y2="458" stroke="#2b2926" stroke-width="1.5" marker-start="url(#aDark)" marker-end="url(#aDark)"/>
 
   <!-- Relay -->
-  <rect x="676" y="398" width="170" height="120" rx="14" fill="#fff" stroke="#2b2926" stroke-width="1.5"/>
-  <text x="761" y="424" class="sans" font-size="11" letter-spacing="1" fill="#2b2926" text-anchor="middle">RELAY (YOUR OWN)</text>
-  <text x="761" y="446" class="mono" font-size="12" fill="#2b2926" text-anchor="middle">uptermd</text>
-  <text x="761" y="474" class="mono" font-size="10.5" fill="#5f8a5f" text-anchor="middle">✓ server key pinned</text>
-  <text x="761" y="492" class="mono" font-size="10.5" fill="#5f8a5f" text-anchor="middle">✓ only your hosts</text>
-  <text x="761" y="540" class="sans" font-size="11" fill="#b5524a" text-anchor="middle">decrypts all traffic —</text>
-  <text x="761" y="555" class="sans" font-size="11" fill="#b5524a" text-anchor="middle">keep it locked down</text>
+  <rect x="676" y="392" width="170" height="138" rx="14" fill="#fff" stroke="#2b2926" stroke-width="1.5"/>
+  <text x="761" y="418" class="sans" font-size="11" letter-spacing="1" fill="#2b2926" text-anchor="middle">RELAY (YOUR OWN)</text>
+  <text x="761" y="440" class="mono" font-size="12" fill="#2b2926" text-anchor="middle">uptermd</text>
+  <text x="761" y="468" class="mono" font-size="10.5" fill="#5f8a5f" text-anchor="middle">✓ server key pinned</text>
+  <text x="761" y="486" class="mono" font-size="10.5" fill="#5f8a5f" text-anchor="middle">✓ only your hosts</text>
+  <text x="761" y="504" class="mono" font-size="10.5" fill="#5f8a5f" text-anchor="middle">✓ enforces join list</text>
+  <text x="761" y="550" class="sans" font-size="11" fill="#b5524a" text-anchor="middle">decrypts all traffic —</text>
+  <text x="761" y="565" class="sans" font-size="11" fill="#b5524a" text-anchor="middle">keep it locked down</text>
 
   <!-- Relay -> clients -->
-  <text x="884" y="430" class="mono" font-size="10" fill="#5a7fa0" text-anchor="middle">ssh -i key</text>
-  <text x="884" y="443" class="mono" font-size="10" fill="#5a7fa0" text-anchor="middle">TOKEN@…</text>
+  <text x="884" y="430" class="mono" font-size="10" fill="#5a7fa0" text-anchor="middle">./join</text>
+  <text x="884" y="443" class="mono" font-size="10" fill="#5a7fa0" text-anchor="middle">&lt;token&gt;</text>
   <line x1="850" y1="458" x2="918" y2="458" stroke="#2b2926" stroke-width="1.5" marker-start="url(#aDark)" marker-end="url(#aDark)"/>
   <g fill="none" stroke="#5a7fa0" stroke-width="1.5">
     <path d="M922,458 C942,458 940,371 958,371" marker-end="url(#aClient)"/>
@@ -111,7 +112,7 @@
   <text x="1057" y="585" class="mono" font-size="10" fill="#5a7fa0" text-anchor="middle">key listed in team_authorized_keys</text>
 
   <!-- Denied client -->
-  <path d="M834,518 C834,600 890,640 958,640" fill="none" stroke="#b5524a" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#aRed)"/>
+  <path d="M834,530 C834,605 890,640 958,640" fill="none" stroke="#b5524a" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#aRed)"/>
   <g stroke="#b5524a" stroke-width="2.5" stroke-linecap="round">
     <line x1="850" y1="596" x2="866" y2="612"/>
     <line x1="866" y1="596" x2="850" y2="612"/>
@@ -126,7 +127,8 @@
     <tspan x="91" y="770">The host always runs <tspan class="mono" fill="#2b2926">pair</tspan> from a real Linux shell — native on macOS/Linux, inside the dedicated</tspan>
     <tspan x="91" y="793"><tspan class="mono" fill="#2b2926">pairing</tspan> WSL distro on Windows. The session runs as the unprivileged <tspan class="mono" fill="#2b2926">pairing</tspan> user, never as you,</tspan>
     <tspan x="91" y="816">and goes through your own relay. Having the token isn't enough to join: the client's key must be in</tspan>
-    <tspan x="91" y="839"><tspan class="mono" fill="#2b2926">team_authorized_keys</tspan>. Clients just need an SSH client, which every OS ships with, so joining never needs WSL.</tspan>
+    <tspan x="91" y="839"><tspan class="mono" fill="#2b2926">team_authorized_keys</tspan>, which the relay enforces. Clients need an SSH client and your team's</tspan>
+    <tspan x="91" y="862"><tspan class="mono" fill="#2b2926">pairing-config</tspan>, whose <tspan class="mono" fill="#2b2926">join</tspan> command does the rest — no WSL needed.</tspan>
   </text>
 
   <!-- ===== Panel 2: why tmux ===== -->

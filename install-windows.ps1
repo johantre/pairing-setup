@@ -40,7 +40,7 @@ $ConfigFiles = "relay.conf", "team_authorized_keys", "relay_authorized_hosts"
 
 function Say($msg) { Write-Host $msg }
 
-# 0a. The team config comes first (see the README's "Setup in four steps"):
+# 0a. The team config comes first (see docs/how-it-works.md, "Roles and repos"):
 #     stop before touching anything if it's missing or not filled in.
 if (-not (Test-Path (Join-Path $Config "relay.conf")) -or -not (Test-Path (Join-Path $Config "team_authorized_keys"))) {
   Say "No team config found in $Config."
@@ -53,7 +53,7 @@ $relayConf = Get-Content (Join-Path $Config "relay.conf") -Raw
 foreach ($var in "RELAY_HOST", "RELAY_PORT", "RELAY_SERVER_KEY") {
   if ($relayConf -notmatch "(?m)^$var=`"[^`"]+`"") {
     Say "$Config\relay.conf isn't filled in ($var is empty)."
-    Say "The relay comes first - see the README's '2. Run your own relay'."
+    Say "The relay comes first - see docs/relay.md."
     exit 1
   }
 }
@@ -71,8 +71,8 @@ Say "    unprivileged user '$Distro' that sessions run as, and install 'pair'"
 Say "  - lock that distro down: no access to your Windows drives (C:) and"
 Say "    no starting Windows programs from inside it"
 Say ""
-Say "Why: anyone who joins a session gets a shell on this machine. See the"
-Say "README's 'Read this first' for what that means and what this setup limits."
+Say "Why: anyone who joins a session gets a shell on this machine. See"
+Say "docs/security.md for what that means and what this setup limits."
 Say ""
 $answer = Read-Host "Continue? [y/N]"
 if ($answer -notmatch '^(y|yes)$') { Say "Nothing changed."; exit 0 }

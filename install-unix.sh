@@ -40,7 +40,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-# Your team's config (see the README's "Setup in four steps"). Fail before
+# Your team's config (see docs/how-it-works.md, "Roles and repos"). Fail before
 # installing anything if it's missing or the relay isn't filled in yet.
 # Stripping \r keeps a CRLF checkout on Windows from breaking it.
 if [ ! -f "$TEAM_CONFIG/relay.conf" ] || [ ! -f "$TEAM_CONFIG/team_authorized_keys" ]; then
@@ -53,7 +53,7 @@ TEAM_CONFIG="$(cd "$TEAM_CONFIG" && pwd)"
 eval "$(tr -d '\r' < "$TEAM_CONFIG/relay.conf")"
 if [ -z "${RELAY_HOST:-}" ] || [ -z "${RELAY_PORT:-}" ] || [ -z "${RELAY_SERVER_KEY:-}" ]; then
   err "$TEAM_CONFIG/relay.conf isn't filled in (RELAY_HOST / RELAY_PORT / RELAY_SERVER_KEY)."
-  err "The relay comes first — see the README's \"2. Run your own relay\"."
+  err "The relay comes first — see docs/relay.md."
   exit 1
 fi
 # known_hosts writes port 22 as a bare host name, any other port as [host]:port.
@@ -157,8 +157,8 @@ confirm_plan() {
     say "  - write /etc/wsl.conf: this distro loses access to Windows drives and Windows programs"
   fi
   say ""
-  say "Why: anyone who joins a session gets a shell on this machine. See the README's"
-  say "\"Read this first\" for what that means and what this setup limits."
+  say "Why: anyone who joins a session gets a shell on this machine. See"
+  say "docs/security.md for what that means and what this setup limits."
   say ""
   [ "$ASSUME_YES" = 1 ] && return
   local answer
@@ -387,7 +387,11 @@ say "Setup done."
 say ""
 # The relay only lets listed machines start sessions; tell the user whether
 # this one is listed yet, going by their current pairing-config checkout.
-if grep -qF "$(printf '%s' "$RELAY_LOGIN_PUB" | cut -d' ' -f2)" "$TEAM_CONFIG/relay_authorized_hosts" 2>/dev/null; then
+# upterm's public relay has no such list: anyone can host there.
+if [ "$RELAY_HOST" = "uptermd.upterm.dev" ]; then
+  say "You're using upterm's public relay: it lets any machine host, so there's"
+  say "nothing to register. (It also sees every session — see docs/relay.md.)"
+elif grep -qF "$(printf '%s' "$RELAY_LOGIN_PUB" | cut -d' ' -f2)" "$TEAM_CONFIG/relay_authorized_hosts" 2>/dev/null; then
   say "This machine's relay login key is in relay_authorized_hosts."
 else
   say "One more step before 'pair' works: the relay doesn't know this machine yet."
